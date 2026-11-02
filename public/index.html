@@ -1,0 +1,348 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>ตารางสอน</title>
+  <meta name="theme-color" content="#4f46e5" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📚</text></svg>" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="/vendor/leaflet/leaflet.css" />
+  <link rel="stylesheet" href="/styles.css" />
+  <link rel="stylesheet" href="/theme.css" id="theme-css" />
+</head>
+<body>
+  <div id="login" class="login hidden">
+    <form class="login-card" id="login-form">
+      <div class="logo-lg">📚</div>
+      <h1>เข้าสู่ระบบ</h1>
+      <p class="muted">ใส่รหัสผ่านผู้ดูแลระบบ</p>
+      <input type="password" name="password" placeholder="รหัสผ่าน" autocomplete="current-password" required />
+      <button class="btn primary block" type="submit">เข้าสู่ระบบ</button>
+      <p class="error" id="login-error"></p>
+    </form>
+  </div>
+
+  <div class="app" id="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-logo">📚</div>
+        <div>
+          <div class="brand-name" data-bind="appName">ตารางสอน</div>
+          <div class="brand-sub" data-bind="schoolName">Classroom Schedule</div>
+        </div>
+      </div>
+      <nav class="nav" id="nav">
+        <a href="#dashboard" data-page="dashboard"><span class="ico">🏠</span><span>ภาพรวม</span></a>
+        <a href="#timetable" data-page="timetable"><span class="ico">🗓️</span><span>ตารางสอน</span></a>
+        <a href="#rooms" data-page="rooms"><span class="ico">📍</span><span>ห้องเรียน</span></a>
+        <a href="#line" data-page="line"><span class="ico">💬</span><span>LINE OA</span></a>
+        <a href="#settings" data-page="settings"><span class="ico">⚙️</span><span>ตั้งค่า</span></a>
+      </nav>
+      <div class="sidebar-foot">
+        <div class="clock" id="clock">--:--</div>
+        <div class="muted small" id="clock-date"></div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <!-- ภาพรวม -->
+      <section class="page" id="page-dashboard">
+        <header class="page-head">
+          <div>
+            <h1 id="greet">สวัสดี 👋</h1>
+            <p class="muted" id="today-label"></p>
+          </div>
+          <button class="btn primary" data-action="new-class">＋ เพิ่มคาบเรียน</button>
+        </header>
+        <div class="grid-2">
+          <div class="card hero" id="now-card"></div>
+          <div class="card">
+            <div class="card-head"><h3>สถานะระบบ</h3></div>
+            <div id="status-list" class="status-list"></div>
+          </div>
+        </div>
+        <div class="grid-2">
+          <div class="card">
+            <div class="card-head"><h3>คาบเรียนวันนี้</h3><span class="chip" id="today-count"></span></div>
+            <div id="today-list" class="timeline"></div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h3>ประวัติการแจ้งเตือน</h3></div>
+            <div id="history" class="history"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ตารางสอน -->
+      <section class="page" id="page-timetable">
+        <header class="page-head">
+          <div>
+            <h1>ตารางสอน</h1>
+            <p class="muted">แตะช่องว่างเพื่อเพิ่มคาบ แตะคาบเพื่อแก้ไข</p>
+          </div>
+          <div class="row gap">
+            <div class="seg" id="tt-view">
+              <button data-view="week" class="active">สัปดาห์</button>
+              <button data-view="list">รายการ</button>
+            </div>
+            <button class="btn primary" data-action="new-class">＋ เพิ่มคาบ</button>
+          </div>
+        </header>
+        <div class="card flush" id="timetable-wrap">
+          <div class="timetable" id="timetable"></div>
+        </div>
+        <div id="class-list" class="class-list hidden"></div>
+      </section>
+
+      <!-- ห้องเรียน -->
+      <section class="page" id="page-rooms">
+        <header class="page-head">
+          <div>
+            <h1>ห้องเรียน</h1>
+            <p class="muted">ปักหมุดตำแหน่งห้อง เพื่อให้นักเรียนกดนำทางจาก LINE ได้ทันที</p>
+          </div>
+          <button class="btn primary" data-action="new-room">＋ เพิ่มห้อง</button>
+        </header>
+        <div class="card flush map-overview"><div id="overview-map"></div></div>
+        <div class="room-grid" id="room-grid"></div>
+      </section>
+
+      <!-- LINE OA -->
+      <section class="page" id="page-line">
+        <header class="page-head">
+          <div>
+            <h1>เชื่อมต่อ LINE OA</h1>
+            <p class="muted">ส่งแจ้งเตือนเป็น Flex Message สวย ๆ พร้อมปุ่มนำทาง</p>
+          </div>
+          <span class="badge" id="line-badge">ยังไม่เชื่อมต่อ</span>
+        </header>
+        <div class="grid-2 align-start">
+          <div class="stack">
+            <form class="card" id="line-form">
+              <div class="card-head"><h3>1. ข้อมูล Channel</h3></div>
+              <ol class="steps">
+                <li>สร้าง LINE OA และเปิด Messaging API ที่ <a href="https://developers.line.biz/console/" target="_blank" rel="noopener">LINE Developers Console</a></li>
+                <li>คัดลอก <b>Channel secret</b> (แท็บ Basic settings) และออก <b>Channel access token</b> (แท็บ Messaging API)</li>
+                <li>ใส่ Webhook URL ด้านล่าง แล้วเปิด <b>Use webhook</b></li>
+              </ol>
+              <label>Channel access token (long-lived)
+                <input type="password" name="channelAccessToken" autocomplete="off" placeholder="วางโทเคนที่นี่" />
+              </label>
+              <label>Channel secret
+                <input type="password" name="channelSecret" autocomplete="off" placeholder="วาง secret ที่นี่" />
+              </label>
+              <label>Webhook URL
+                <div class="input-copy"><input type="text" id="webhook-url" readonly /><button type="button" class="btn" data-copy="#webhook-url">คัดลอก</button></div>
+              </label>
+              <div class="row gap wrap">
+                <button class="btn primary" type="submit">บันทึก</button>
+                <button class="btn" type="button" id="line-verify">ทดสอบการเชื่อมต่อ</button>
+              </div>
+              <div id="bot-info"></div>
+            </form>
+
+            <form class="card" id="line-mode-form">
+              <div class="card-head"><h3>2. ส่งถึงใคร</h3></div>
+              <div class="radio-cards">
+                <label class="radio-card"><input type="radio" name="sendMode" value="broadcast" /><div><b>📢 Broadcast</b><span>ส่งถึงเพื่อนทุกคนของ OA</span></div></label>
+                <label class="radio-card"><input type="radio" name="sendMode" value="push" /><div><b>🎯 เลือกผู้รับ</b><span>ส่งเฉพาะคน/กลุ่มที่เปิดไว้ด้านล่าง</span></div></label>
+              </div>
+              <label class="switch-row"><span>เพิ่มผู้รับอัตโนมัติเมื่อมีคนเพิ่มเพื่อน / เชิญบอทเข้ากลุ่ม</span><input type="checkbox" class="switch" name="autoAddFollowers" /></label>
+              <label class="switch-row"><span>ตอบกลับคำว่า “ตารางวันนี้ / พรุ่งนี้ / ตารางวันจันทร์”</span><input type="checkbox" class="switch" name="replyKeywords" /></label>
+              <div class="card-head mt"><h4>ผู้รับ</h4><button type="button" class="btn sm" id="add-recipient">＋ เพิ่ม ID</button></div>
+              <div id="recipients" class="recipients"></div>
+            </form>
+          </div>
+
+          <div class="card sticky">
+            <div class="card-head"><h3>ตัวอย่างข้อความ</h3>
+              <select id="preview-class" class="sm"></select>
+            </div>
+            <div class="phone">
+              <div class="phone-top"><span class="oa-avatar">📚</span><b data-bind="appName">ตารางสอน</b></div>
+              <div class="phone-chat" id="flex-preview"></div>
+            </div>
+            <div class="row gap wrap mt">
+              <button class="btn primary" id="send-test">📨 ส่งทดสอบไปที่ LINE</button>
+              <button class="btn" id="send-day">ส่งตารางวันนี้</button>
+              <button class="btn ghost" id="copy-flex" title="คัดลอก JSON ไปทดลองใน Flex Message Simulator">{ } JSON</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ตั้งค่า -->
+      <section class="page" id="page-settings">
+        <header class="page-head"><div><h1>ตั้งค่า</h1><p class="muted">ปรับเวลา วัน การแจ้งเตือน หน้าตา และฟอนต์</p></div></header>
+        <div class="grid-2 align-start">
+          <form class="card" id="settings-form">
+            <div class="card-head"><h3>ทั่วไป</h3></div>
+            <label>ชื่อระบบ<input name="appName" maxlength="40" /></label>
+            <label>ชื่อโรงเรียน / หน่วยงาน<input name="schoolName" maxlength="80" /></label>
+            <label>โซนเวลา<select name="timezone" id="tz-select"></select></label>
+            <div class="card-head mt"><h3>ตารางเวลา</h3></div>
+            <div class="field-label">วันที่แสดงในตาราง</div>
+            <div class="day-picker" id="day-picker"></div>
+            <div class="row gap">
+              <label class="grow">เริ่มตาราง<input type="time" name="dayStart" step="1800" /></label>
+              <label class="grow">สิ้นสุดตาราง<input type="time" name="dayEnd" step="1800" /></label>
+            </div>
+            <div class="card-head mt"><h3>การแจ้งเตือน</h3></div>
+            <label class="switch-row"><span>เปิดระบบแจ้งเตือนอัตโนมัติ</span><input type="checkbox" class="switch" name="remindersEnabled" /></label>
+            <label>แจ้งเตือนก่อนเริ่มคาบ (ค่าเริ่มต้น)
+              <div class="input-suffix"><input type="number" name="defaultReminderMinutes" min="0" max="1440" /><span>นาที</span></div>
+            </label>
+            <div class="chips-row" data-for="defaultReminderMinutes">
+              <button type="button" data-min="5">5</button><button type="button" data-min="10">10</button><button type="button" data-min="15">15</button><button type="button" data-min="30">30</button><button type="button" data-min="60">60</button>
+            </div>
+            <div class="card-head mt"><h3>สีหลัก</h3></div>
+            <div class="swatches" id="accent-swatches"></div>
+            <button class="btn primary mt" type="submit">บันทึกการตั้งค่า</button>
+          </form>
+
+          <div class="stack">
+            <div class="card" id="font-card">
+              <div class="card-head"><h3>ฟอนต์</h3></div>
+              <div class="seg full" id="font-source">
+                <button type="button" data-src="google">Google Fonts</button>
+                <button type="button" data-src="custom">ฟอนต์ของฉัน</button>
+                <button type="button" data-src="system">ฟอนต์ระบบ</button>
+              </div>
+              <div id="font-google" class="font-pane">
+                <div class="input-copy">
+                  <input type="text" id="gf-input" list="gf-list" placeholder="พิมพ์ชื่อฟอนต์จาก Google Fonts เช่น Kanit" />
+                  <button type="button" class="btn" id="gf-apply">ใช้ฟอนต์นี้</button>
+                </div>
+                <datalist id="gf-list"></datalist>
+                <p class="muted small">เลือกจากฟอนต์ภาษาไทยยอดนิยม หรือพิมพ์ชื่อฟอนต์ใดก็ได้จาก <a href="https://fonts.google.com/?subset=thai" target="_blank" rel="noopener">fonts.google.com</a></p>
+                <div class="font-grid" id="gf-grid"></div>
+              </div>
+              <div id="font-custom" class="font-pane hidden">
+                <form id="font-upload" class="upload">
+                  <label class="dropzone" id="dropzone">
+                    <input type="file" name="file" accept=".ttf,.otf,.woff,.woff2" hidden />
+                    <div class="dz-ico">🔤</div>
+                    <b>ลากไฟล์ฟอนต์มาวาง หรือแตะเพื่อเลือก</b>
+                    <span class="muted small">.ttf .otf .woff .woff2 · ไม่เกิน 15MB</span>
+                    <span class="dz-file" id="dz-file"></span>
+                  </label>
+                  <div class="row gap">
+                    <input type="text" name="family" placeholder="ชื่อฟอนต์ (ไม่บังคับ)" class="grow" />
+                    <button class="btn primary" type="submit">อัปโหลด</button>
+                  </div>
+                </form>
+                <div id="custom-fonts" class="font-grid"></div>
+              </div>
+              <div id="font-system" class="font-pane hidden"><p class="muted">ใช้ฟอนต์มาตรฐานของอุปกรณ์ (โหลดเร็วที่สุด)</p></div>
+              <p class="note">ℹ️ ฟอนต์มีผลกับหน้าเว็บนี้ ส่วนข้อความใน LINE จะแสดงด้วยฟอนต์ของแอป LINE ตามข้อกำหนดของ Flex Message</p>
+            </div>
+
+            <div class="card">
+              <div class="card-head"><h3>สำรองข้อมูล</h3></div>
+              <p class="muted small">ส่งออก/นำเข้าตารางสอนและห้องเรียนเป็นไฟล์ JSON</p>
+              <div class="row gap wrap">
+                <a class="btn" id="export-btn" href="/api/export">⬇️ ส่งออก</a>
+                <label class="btn">⬆️ นำเข้า<input type="file" id="import-file" accept="application/json" hidden /></label>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Modal: คาบเรียน -->
+  <dialog id="class-dialog" class="dialog">
+    <form method="dialog" id="class-form">
+      <header class="dialog-head" id="class-dialog-head">
+        <h2 id="class-dialog-title">เพิ่มคาบเรียน</h2>
+        <button type="button" class="icon-btn" data-close>✕</button>
+      </header>
+      <div class="dialog-body two-col">
+        <div>
+          <label>ชื่อวิชา *<input name="subject" required maxlength="100" placeholder="เช่น คณิตศาสตร์" /></label>
+          <div class="row gap">
+            <label class="grow">รหัสวิชา<input name="code" maxlength="40" placeholder="ค31101" /></label>
+            <label class="grow">ผู้สอน<input name="teacher" maxlength="80" /></label>
+          </div>
+          <div class="field-label">วัน</div>
+          <div class="day-picker single" id="class-day"></div>
+          <div class="row gap">
+            <label class="grow">เริ่ม<input type="time" name="start" required /></label>
+            <label class="grow">เลิก<input type="time" name="end" required /></label>
+          </div>
+          <label>ห้องเรียน<select name="roomId" id="class-room"></select></label>
+          <label>หมายเหตุ (แสดงในข้อความแจ้งเตือน)<textarea name="note" rows="2" maxlength="400" placeholder="เช่น นำหนังสือเล่ม 2 มาด้วย"></textarea></label>
+          <div class="field-label">สี</div>
+          <div class="swatches" id="class-colors"></div>
+        </div>
+        <div>
+          <div class="reminder-box">
+            <label class="switch-row"><span><b>🔔 แจ้งเตือนผ่าน LINE</b></span><input type="checkbox" class="switch" name="reminderEnabled" /></label>
+            <div class="field-label">แจ้งก่อนเริ่มคาบ 1 ครั้ง</div>
+            <div class="chips-row" data-for="reminderMinutes">
+              <button type="button" data-min="">ค่าเริ่มต้น</button><button type="button" data-min="0">ตรงเวลา</button><button type="button" data-min="5">5</button><button type="button" data-min="10">10</button><button type="button" data-min="15">15</button><button type="button" data-min="30">30</button><button type="button" data-min="60">60</button>
+            </div>
+            <div class="input-suffix"><input type="number" name="reminderMinutes" min="0" max="1440" placeholder="ใช้ค่าเริ่มต้น" /><span>นาทีก่อนเริ่ม</span></div>
+            <p class="muted small" id="reminder-hint"></p>
+          </div>
+          <div class="field-label">ตัวอย่างใน LINE</div>
+          <div class="phone mini"><div class="phone-chat" id="class-preview"></div></div>
+        </div>
+      </div>
+      <footer class="dialog-foot">
+        <button type="button" class="btn danger ghost" id="class-delete">ลบ</button>
+        <span class="grow"></span>
+        <button type="button" class="btn" id="class-test">ส่งทดสอบ</button>
+        <button type="submit" class="btn primary">บันทึก</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <!-- Modal: ห้องเรียน -->
+  <dialog id="room-dialog" class="dialog wide">
+    <form method="dialog" id="room-form">
+      <header class="dialog-head"><h2 id="room-dialog-title">เพิ่มห้องเรียน</h2><button type="button" class="icon-btn" data-close>✕</button></header>
+      <div class="dialog-body two-col">
+        <div>
+          <label>ชื่อห้อง *<input name="name" required maxlength="80" placeholder="เช่น ห้อง 301" /></label>
+          <div class="row gap">
+            <label class="grow">อาคาร<input name="building" maxlength="80" /></label>
+            <label style="width:110px">ชั้น<input name="floor" maxlength="20" /></label>
+          </div>
+          <label>คำอธิบายทางไป<textarea name="detail" rows="2" maxlength="300" placeholder="เช่น ขึ้นบันไดฝั่งโรงอาหาร ห้องที่ 2 ทางซ้าย"></textarea></label>
+          <label>วางลิงก์ Google Maps (ดึงพิกัดอัตโนมัติ)<input name="mapUrl" placeholder="https://maps.google.com/..." /></label>
+          <div class="row gap">
+            <label class="grow">ละติจูด<input name="lat" inputmode="decimal" /></label>
+            <label class="grow">ลองจิจูด<input name="lng" inputmode="decimal" /></label>
+          </div>
+          <div class="field-label">สี</div>
+          <div class="swatches" id="room-colors"></div>
+        </div>
+        <div>
+          <div class="map-tools">
+            <input type="search" id="map-search" placeholder="🔎 ค้นหาสถานที่ เช่น ชื่อโรงเรียน" />
+            <button type="button" class="btn sm" id="map-locate">📡 ตำแหน่งฉัน</button>
+          </div>
+          <div id="room-map" class="room-map"></div>
+          <p class="muted small">แตะบนแผนที่หรือลากหมุดเพื่อกำหนดตำแหน่งห้อง</p>
+        </div>
+      </div>
+      <footer class="dialog-foot">
+        <button type="button" class="btn danger ghost" id="room-delete">ลบ</button>
+        <span class="grow"></span>
+        <a class="btn" id="room-nav" target="_blank" rel="noopener">🧭 ทดลองนำทาง</a>
+        <button type="submit" class="btn primary">บันทึก</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <div class="toasts" id="toasts"></div>
+
+  <script src="/vendor/leaflet/leaflet.js"></script>
+  <script src="/flex.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>
