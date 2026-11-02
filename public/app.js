@@ -34,7 +34,11 @@
     const el = document.createElement('div');
     el.className = `toast ${type}`;
     el.textContent = msg;
-    $('#toasts').append(el);
+    // แสดงเหนือ dialog ที่เปิดอยู่ (dialog อยู่ใน top layer)
+    const host = document.querySelector('dialog[open]');
+    let box = host ? host.querySelector('.toasts') : $('#toasts');
+    if (!box) { box = document.createElement('div'); box.className = 'toasts'; host.append(box); }
+    box.append(el);
     setTimeout(() => { el.style.opacity = '0'; el.style.transition = '.3s'; setTimeout(() => el.remove(), 300); }, type === 'err' ? 5000 : 2800);
   }
 
@@ -387,6 +391,7 @@
     dayPicker($('#day-picker'), s.visibleDays, false);
     swatches($('#accent-swatches'), s.accentColor, (c) => document.documentElement.style.setProperty('--accent', c));
     renderFonts();
+    renderAi();
   }
 
   function renderFonts() {
@@ -464,6 +469,7 @@
     const t = e.target;
     if (t.closest('[data-action=new-class]')) return S.rooms.length || confirm('ยังไม่มีห้องเรียน ต้องการเพิ่มคาบโดยไม่ระบุห้องหรือไม่?') ? openClass() : (location.hash = '#rooms');
     if (t.closest('[data-action=new-room]')) return openRoom();
+    if (t.closest('[data-action=vision]')) return openVision();
     const ec = t.closest('[data-edit-class]'); if (ec) return openClass(ec.dataset.editClass);
     const er = t.closest('[data-edit-room]'); if (er) return openRoom(er.dataset.editRoom);
     if (t.closest('[data-close]')) return t.closest('dialog').close();
@@ -692,6 +698,187 @@
       refresh();
     } catch (er) { toast(er.message, 'err'); }
     e.target.value = '';
+  };
+
+  // ---------------- v2.0: เพิ่มตารางจากรูป ----------------
+  const VS_STATUS = { ok: '✓ พร้อมเพิ่ม', added: '✓ เพิ่มแล้ว', duplicate: 'ซ้ำ', conflict: '⚠ เวลาชน', invalid: '✕ ไม่ครบ' };
+  let vsBlob = null, vsEntries = [], vsWarnings = [];
+
+  function vsStep(name) {
+    for (const s of ['upload', 'loading', 'result']) $(`#vs-${s}`).classList.toggle('hidden', s !== name);
+    $('#vs-analyze').hidden = name !== 'upload';
+    $('#vs-commit').hidden = name !== 'result';
+    $('#vs-back').hidden = name !== 'result';
+    $('#vs-foot-note').textContent = name === 'upload' && !S.settings.ai?.hasKey ? '⚠️ ต้องตั้งค่า Anthropic API Key ในหน้าตั้งค่าก่อน' : '';
+  }
+  function openVision() {
+    vsBlob = null; vsEntries = [];
+    $('#vs-file').value = '';
+    $('#vs-preview').classList.add('hidden');
+    $('#vs-empty').classList.remove('hidden');
+    $('#vs-analyze').disabled = true;
+    vsStep('upload');
+    $('#vision-dialog').showModal();
+  }
+
+  /** ย่อรูปฝั่งเบราว์เซอร์ (ด้านยาวสุด 2000px) ให้ส่งเร็วและไม่เกินขนาดที่ AI รับได้ */
+  async function shrinkImage(file) {
+    const url = URL.createObjectURL(file);
+    try {
+      const img = await new Promise((ok, bad) => { const i = new Image(); i.onload = () => ok(i); i.onerror = () => bad(new Error('เปิดรูปนี้ไม่ได้ (ลองแปลงเป็น JPG/PNG)')); i.src = url; });
+      const scale = Math.min(1, 2000 / Math.max(img.naturalWidth, img.naturalHeight));
+      if (scale === 1 && file.size < 3.5 * 1024 * 1024 && ['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) return file;
+      const c = document.createElement('canvas');
+      c.width = Math.round(img.naturalWidth * scale); c.height = Math.round(img.naturalHeight * scale);
+      const ctx = c.getContext('2d');
+      ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
+      ctx.drawImage(img, 0, 0, c.width, c.height);
+      return await new Promise((ok) => c.toBlob(ok, 'image/jpeg', 0.9));
+    } finally { URL.revokeObjectURL(url); }
+  }
+  async function vsSetFile(file) {
+    if (!file || !file.type.startsWith('image/')) return toast('กรุณาเลือกไฟล์รูปภาพ', 'err');
+    try {
+      vsBlob = await shrinkImage(file);
+      const url = URL.createObjectURL(vsBlob);
+      $('#vs-preview').src = url; $('#vs-scan-img').src = url;
+      $('#vs-preview').classList.remove('hidden');
+      $('#vs-empty').classList.add('hidden');
+      $('#vs-analyze').disabled = false;
+    } catch (e) { toast(e.message, 'err'); }
+  }
+
+  async function vsAnalyze() {
+    if (!vsBlob) return;
+    if (!S.settings.ai?.hasKey) { toast('กรุณาตั้งค่า Anthropic API Key ก่อน', 'err'); $('#vision-dialog').close(); location.hash = '#settings'; return; }
+    vsStep('loading');
+    const msgs = ['AI กำลังอ่านตารางสอน…', 'กำลังแยกวิชา วัน และเวลา…', 'กำลังตรวจสอบคาบซ้ำและเวลาชน…'];
+    let i = 0;
+    const t = setInterval(() => { $('#vs-loading-text').textContent = msgs[++i % msgs.length]; }, 4000);
+    try {
+      const fd = new FormData();
+      fd.append('image', vsBlob, 'timetable.jpg');
+      fd.append('hint', $('#vs-hint').value);
+      fd.append('auto', $('#vs-auto').checked ? '1' : '0');
+      const r = await api('/api/vision/analyze', { method: 'POST', body: fd });
+      vsEntries = r.entries;
+      vsWarnings = r.warnings || [];
+      if (r.commit) {
+        const n = r.commit.added.length;
+        toast(n ? `เพิ่ม ${n} คาบเข้าตารางแล้ว 🎉${r.commit.createdRooms.length ? ` (สร้างห้องใหม่ ${r.commit.createdRooms.length} ห้อง)` : ''}` : 'ไม่มีรายการที่เพิ่มอัตโนมัติได้ กรุณาตรวจสอบ', n ? 'ok' : '');
+        await refresh();
+      }
+      renderVisionResult();
+      vsStep('result');
+    } catch (e) {
+      toast(e.message, 'err');
+      vsStep('upload');
+    } finally { clearInterval(t); }
+  }
+
+  function renderVisionResult() {
+    const warnings = vsWarnings;
+    const count = (st) => vsEntries.filter((e) => e.status === st).length;
+    const sum = [
+      ['📋', `พบ ${vsEntries.length} คาบ`],
+      count('added') && ['✅', `เพิ่มแล้ว ${count('added')}`],
+      count('ok') && ['🟢', `พร้อมเพิ่ม ${count('ok')}`],
+      count('conflict') && ['⚠️', `เวลาชน ${count('conflict')}`],
+      count('duplicate') && ['♻️', `ซ้ำ ${count('duplicate')}`],
+      count('invalid') && ['✕', `ต้องแก้ ${count('invalid')}`],
+    ].filter(Boolean);
+    $('#vs-summary').innerHTML = sum.map(([i, t]) => `<span>${i} ${t}</span>`).join('');
+    $('#vs-warnings').innerHTML = warnings.map((w) => `<div class="vs-warn">⚠️ ${esc(w)}</div>`).join('')
+      + (vsEntries.length ? '' : '<div class="empty"><span class="big">🤔</span>ไม่พบคาบเรียนในรูปนี้ ลองใช้รูปที่ชัดขึ้น หรือเพิ่มข้อมูลเพิ่มเติม</div>');
+    $('#vs-rooms').innerHTML = S.rooms.map((r) => `<option value="${esc(r.name)}">`).join('');
+    const dayOpts = (d) => [1, 2, 3, 4, 5, 6, 0].map((x) => `<option value="${x}" ${x === d ? 'selected' : ''}>${DAYS[x]}</option>`).join('');
+    $('#vs-rows').innerHTML = vsEntries.map((e, i) => {
+      const done = e.status === 'added';
+      const checked = e.status === 'ok';
+      return `<tr data-i="${i}" class="${checked || done ? '' : 'off'} ${e.confidence === 'low' ? 'conf-low' : ''}">
+        <td><input type="checkbox" data-f="pick" ${checked ? 'checked' : ''} ${done ? 'disabled' : ''} /></td>
+        <td><span class="st ${e.status}">${VS_STATUS[e.status]}</span>${e.issues.length ? `<div class="why">${esc(e.issues.join(' · '))}</div>` : ''}${e.confidence === 'low' ? '<div class="why">🔎 AI ไม่แน่ใจ</div>' : ''}${e.remark ? `<div class="why">💬 ${esc(e.remark)}</div>` : ''}</td>
+        <td><select data-f="day" ${done ? 'disabled' : ''}>${dayOpts(e.day)}</select></td>
+        <td><div class="t2"><input type="time" data-f="start" value="${esc(e.start)}" ${done ? 'disabled' : ''} />–<input type="time" data-f="end" value="${esc(e.end)}" ${done ? 'disabled' : ''} /></div></td>
+        <td><input data-f="subject" value="${esc(e.subject)}" ${done ? 'disabled' : ''} />${e.code ? `<div class="why">${esc(e.code)}</div>` : ''}</td>
+        <td><input data-f="roomName" list="vs-rooms" value="${esc(e.roomName)}" ${done ? 'disabled' : ''} />${e.newRoom && !done ? '<div class="newroom">＋ จะสร้างห้องใหม่</div>' : ''}</td>
+        <td><input data-f="teacher" value="${esc(e.teacher)}" ${done ? 'disabled' : ''} /></td>
+      </tr>`;
+    }).join('');
+    vsUpdateCommit();
+  }
+  function vsUpdateCommit() {
+    const n = $$('#vs-rows [data-f=pick]:checked:not(:disabled)').length;
+    $('#vs-commit').textContent = n ? `เพิ่ม ${n} รายการที่เลือก` : 'เสร็จสิ้น';
+    $('#vs-all').checked = n > 0 && n === $$('#vs-rows [data-f=pick]:not(:disabled)').length;
+  }
+
+  $('#vs-file').onchange = (e) => vsSetFile(e.target.files[0]);
+  const vsDrop = $('#vs-drop');
+  ['dragenter', 'dragover'].forEach((ev) => vsDrop.addEventListener(ev, (e) => { e.preventDefault(); vsDrop.classList.add('over'); }));
+  ['dragleave', 'drop'].forEach((ev) => vsDrop.addEventListener(ev, (e) => { e.preventDefault(); vsDrop.classList.remove('over'); }));
+  vsDrop.addEventListener('drop', (e) => vsSetFile(e.dataTransfer.files[0]));
+  document.addEventListener('paste', (e) => {
+    if (!$('#vision-dialog').open || $('#vs-upload').classList.contains('hidden')) return;
+    const item = [...(e.clipboardData?.items || [])].find((x) => x.type.startsWith('image/'));
+    if (item) vsSetFile(item.getAsFile());
+  });
+  $('#vs-analyze').onclick = vsAnalyze;
+  $('#vs-back').onclick = () => openVision();
+  $('#vs-rows').addEventListener('input', (e) => {
+    const tr = e.target.closest('tr'); const f = e.target.dataset.f;
+    if (!tr || !f) return;
+    const entry = vsEntries[+tr.dataset.i];
+    if (f === 'pick') tr.classList.toggle('off', !e.target.checked);
+    else {
+      entry[f] = f === 'day' ? +e.target.value : e.target.value;
+      if (f === 'roomName') entry.roomId = null;
+      const pick = tr.querySelector('[data-f=pick]');
+      if (!pick.checked && entry.status === 'invalid' && entry.subject && entry.start && entry.end) { pick.checked = true; tr.classList.remove('off'); }
+    }
+    vsUpdateCommit();
+  });
+  $('#vs-all').onchange = (e) => {
+    $$('#vs-rows [data-f=pick]:not(:disabled)').forEach((c) => { c.checked = e.target.checked; c.closest('tr').classList.toggle('off', !c.checked); });
+    vsUpdateCommit();
+  };
+  $('#vs-commit').onclick = () => busy($('#vs-commit'), async () => {
+    const picked = $$('#vs-rows tr').filter((tr) => { const c = tr.querySelector('[data-f=pick]'); return c.checked && !c.disabled; }).map((tr) => vsEntries[+tr.dataset.i]);
+    if (!picked.length) { $('#vision-dialog').close(); return; }
+    const r = await api('/api/vision/commit', { method: 'POST', body: { entries: picked } });
+    picked.forEach((p, k) => {
+      const res = r.results[k];
+      p.status = res.ok ? 'added' : 'invalid';
+      if (!res.ok) p.issues = [res.error];
+    });
+    if (r.failed.length) toast(`เพิ่มไม่สำเร็จ ${r.failed.length} รายการ: ${r.failed[0].subject} — ${r.failed[0].error}`, 'err');
+    if (r.added.length) toast(`เพิ่ม ${r.added.length} คาบเข้าตารางแล้ว 🎉${r.createdRooms.length ? ` (สร้างห้องใหม่ ${r.createdRooms.length} ห้อง)` : ''}`, 'ok');
+    await refresh();
+    renderVisionResult();
+  });
+
+  // AI settings
+  function renderAi() {
+    const ai = S.settings.ai || {};
+    const b = $('#ai-badge');
+    b.textContent = ai.hasKey ? `● พร้อมใช้ ${ai.keyHint}${ai.fromEnv ? ' (.env)' : ''}` : 'ยังไม่ตั้งค่า';
+    b.classList.toggle('ok', !!ai.hasKey);
+    $('#ai-form').apiKey.placeholder = ai.hasKey ? 'บันทึกแล้ว — ใส่ใหม่เพื่อเปลี่ยน' : 'sk-ant-...';
+  }
+  $('#ai-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    await busy(e.submitter, async () => {
+      if (!e.target.apiKey.value.trim()) throw new Error('กรุณาใส่ API Key');
+      S.settings = await api('/api/settings/ai', { method: 'PUT', body: { apiKey: e.target.apiKey.value } });
+      e.target.apiKey.value = '';
+      renderAi();
+      toast('บันทึก API Key แล้ว ✨', 'ok');
+    });
+  });
+  $('#ai-clear').onclick = async () => {
+    if (!confirm('ลบ API Key?')) return;
+    S.settings = await api('/api/settings/ai', { method: 'PUT', body: { clear: true } });
+    renderAi();
   };
 
   // ---------------- Login / boot ----------------

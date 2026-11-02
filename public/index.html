@@ -29,7 +29,7 @@
       <div class="brand">
         <div class="brand-logo">📚</div>
         <div>
-          <div class="brand-name" data-bind="appName">ตารางสอน</div>
+          <div class="brand-name"><span data-bind="appName">ตารางสอน</span> <span class="ver">v2.0</span></div>
           <div class="brand-sub" data-bind="schoolName">Classroom Schedule</div>
         </div>
       </div>
@@ -54,7 +54,10 @@
             <h1 id="greet">สวัสดี 👋</h1>
             <p class="muted" id="today-label"></p>
           </div>
-          <button class="btn primary" data-action="new-class">＋ เพิ่มคาบเรียน</button>
+          <div class="row gap wrap">
+            <button class="btn" data-action="vision">📷 เพิ่มจากรูป</button>
+            <button class="btn primary" data-action="new-class">＋ เพิ่มคาบเรียน</button>
+          </div>
         </header>
         <div class="grid-2">
           <div class="card hero" id="now-card"></div>
@@ -87,6 +90,7 @@
               <button data-view="week" class="active">สัปดาห์</button>
               <button data-view="list">รายการ</button>
             </div>
+            <button class="btn" data-action="vision">📷 เพิ่มจากรูป</button>
             <button class="btn primary" data-action="new-class">＋ เพิ่มคาบ</button>
           </div>
         </header>
@@ -203,6 +207,16 @@
           </form>
 
           <div class="stack">
+            <form class="card" id="ai-form">
+              <div class="card-head"><h3>✨ AI อ่านตารางจากรูป</h3><span class="badge" id="ai-badge">ยังไม่ตั้งค่า</span></div>
+              <p class="muted small">อัปโหลดรูปตารางสอน แล้วระบบจะอ่าน ตรวจสอบ และเพิ่มคาบให้อัตโนมัติ ต้องใช้ API Key จาก <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">Anthropic Console</a> (คิดค่าบริการตามการใช้งาน ประมาณไม่กี่บาทต่อรูป)</p>
+              <label>Anthropic API Key<input type="password" name="apiKey" autocomplete="off" placeholder="sk-ant-..." /></label>
+              <div class="row gap wrap">
+                <button class="btn primary" type="submit">บันทึก</button>
+                <button class="btn ghost danger" type="button" id="ai-clear">ลบคีย์</button>
+              </div>
+            </form>
+
             <div class="card" id="font-card">
               <div class="card-head"><h3>ฟอนต์</h3></div>
               <div class="seg full" id="font-source">
@@ -335,6 +349,65 @@
         <span class="grow"></span>
         <a class="btn" id="room-nav" target="_blank" rel="noopener">🧭 ทดลองนำทาง</a>
         <button type="submit" class="btn primary">บันทึก</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <!-- Modal: เพิ่มจากรูป (v2.0) -->
+  <dialog id="vision-dialog" class="dialog wide">
+    <form method="dialog" id="vision-form">
+      <header class="dialog-head"><h2>📷 เพิ่มตารางสอนจากรูป <span class="ver">AI</span></h2><button type="button" class="icon-btn" data-close>✕</button></header>
+      <div class="dialog-body">
+        <!-- ขั้นที่ 1: เลือกรูป -->
+        <div id="vs-upload" class="vs-step">
+          <div class="two-col">
+            <div>
+              <label class="dropzone vs-drop" id="vs-drop">
+                <input type="file" id="vs-file" accept="image/*" hidden />
+                <img id="vs-preview" class="hidden" alt="" />
+                <div id="vs-empty">
+                  <div class="dz-ico">🖼️</div>
+                  <b>ลากรูปตารางสอนมาวาง หรือแตะเพื่อเลือก / ถ่ายรูป</b>
+                  <span class="muted small">JPG, PNG, WEBP · วางจากคลิปบอร์ด (Ctrl+V) ได้</span>
+                </div>
+              </label>
+            </div>
+            <div>
+              <ol class="steps vs-how">
+                <li>📸 ถ่ายหรือแคปรูปตารางให้เห็นครบทุกช่อง ตัวหนังสือชัด</li>
+                <li>✨ AI อ่านวิชา วัน เวลา ห้อง และผู้สอน</li>
+                <li>🔍 ระบบตรวจสอบเวลาผิด คาบซ้ำ คาบชน และจับคู่ห้องที่มีอยู่</li>
+                <li>✅ เพิ่มเข้าตารางพร้อมแจ้งเตือน LINE ทันที</li>
+              </ol>
+              <label>ข้อมูลเพิ่มเติม (ไม่บังคับ)
+                <textarea id="vs-hint" rows="3" maxlength="1000" placeholder="เช่น คาบ 1 เริ่ม 08:30 คาบละ 50 นาที พักเที่ยงหลังคาบ 4 / ไม่ต้องเอาคาบโฮมรูม"></textarea>
+              </label>
+              <label class="switch-row"><span><b>เพิ่มอัตโนมัติ</b><br><span class="muted small">เพิ่มรายการที่ผ่านการตรวจทันที ส่วนที่ซ้ำ ชน หรือผิดพลาดจะให้ตรวจเอง</span></span><input type="checkbox" class="switch" id="vs-auto" checked /></label>
+            </div>
+          </div>
+        </div>
+        <!-- ขั้นที่ 2: กำลังอ่าน -->
+        <div id="vs-loading" class="vs-step hidden">
+          <div class="vs-scan"><img id="vs-scan-img" alt="" /><i></i></div>
+          <h3 id="vs-loading-text">AI กำลังอ่านตารางสอน…</h3>
+          <p class="muted small">ใช้เวลาประมาณ 10–60 วินาที</p>
+        </div>
+        <!-- ขั้นที่ 3: ผลลัพธ์ -->
+        <div id="vs-result" class="vs-step hidden">
+          <div id="vs-summary" class="vs-summary"></div>
+          <div id="vs-warnings"></div>
+          <div class="vs-table-wrap"><table class="vs-table">
+            <thead><tr><th><input type="checkbox" id="vs-all" /></th><th>สถานะ</th><th>วัน</th><th>เวลา</th><th>วิชา</th><th>ห้อง</th><th>ผู้สอน</th></tr></thead>
+            <tbody id="vs-rows"></tbody>
+          </table></div>
+          <datalist id="vs-rooms"></datalist>
+        </div>
+      </div>
+      <footer class="dialog-foot">
+        <button type="button" class="btn ghost" id="vs-back" hidden>← รูปอื่น</button>
+        <span class="grow muted small" id="vs-foot-note"></span>
+        <button type="button" class="btn primary" id="vs-analyze" disabled>✨ อ่านตาราง</button>
+        <button type="button" class="btn primary" id="vs-commit" hidden>เพิ่มรายการที่เลือก</button>
       </footer>
     </form>
   </dialog>

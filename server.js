@@ -8,6 +8,7 @@ const multer = require('multer');
 const store = require('./src/store');
 const line = require('./src/line');
 const scheduler = require('./src/scheduler');
+const vision = require('./src/vision');
 const { DAY_NAMES, localParts, isValidTime, isValidTimeZone, toMin } = require('./src/time');
 
 const app = express();
@@ -126,7 +127,8 @@ function publicUrl(req) {
   return (process.env.PUBLIC_URL || `${req.protocol}://${req.get('host')}`).replace(/\/$/, '');
 }
 function maskedSettings(settings) {
-  const { line: l, ...rest } = settings;
+  const { line: l, ai = {}, ...rest } = settings;
+  const aiKey = vision.apiKeyOf(settings);
   const tok = l.channelAccessToken || process.env.LINE_CHANNEL_ACCESS_TOKEN || '';
   const sec = l.channelSecret || process.env.LINE_CHANNEL_SECRET || '';
   return {
@@ -137,6 +139,7 @@ function maskedSettings(settings) {
       hasSecret: !!sec, secretHint: sec ? '••••' + sec.slice(-4) : '',
       fromEnv: !l.channelAccessToken && !!process.env.LINE_CHANNEL_ACCESS_TOKEN,
     },
+    ai: { hasKey: !!aiKey, keyHint: aiKey ? '••••' + aiKey.slice(-4) : '', fromEnv: !ai.apiKey && !!process.env.ANTHROPIC_API_KEY, model: vision.MODEL },
   };
 }
 app.get('/api/state', (req, res) => {
@@ -190,6 +193,15 @@ app.put('/api/settings/line', (req, res) => {
   if (typeof b.replyKeywords === 'boolean') l.replyKeywords = b.replyKeywords;
   store.save();
   res.json(maskedSettings(store.db.settings));
+});
+
+app.put('/api/settings/ai', (req, res) => {
+  const s = store.db.settings;
+  s.ai = s.ai || { apiKey: '' };
+  if (typeof req.body?.apiKey === 'string' && req.body.apiKey.trim()) s.ai.apiKey = req.body.apiKey.trim();
+  if (req.body?.clear) s.ai.apiKey = '';
+  store.save();
+  res.json(maskedSettings(s));
 });
 
 app.post('/api/line/verify', async (req, res) => {
@@ -352,6 +364,78 @@ app.delete('/api/fonts/:id', (req, res) => {
   store.removeFont(font.file).catch((e) => console.error('[fonts]', e.message));
   if (db.settings.font.customFontId === font.id) db.settings.font = { ...db.settings.font, source: 'google', customFontId: null };
   store.save(); res.json({ ok: true });
+});
+
+// ---------- v2.0: เพิ่มตารางจากรูป ----------
+const IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+const imageUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => cb(IMAGE_TYPES.includes(file.mimetype) ? null : new Error('รองรับเฉพาะรูป JPG, PNG, WEBP, GIF'), true),
+});
+const CLASS_COLORS = ['#6366f1', '#0ea5e9', '#14b8a6', '#22c55e', '#eab308', '#f97316', '#ef4444', '#ec4899', '#a855f7', '#06b6d4', '#84cc16', '#f43f5e'];
+
+/** เพิ่มรายการที่ตรวจแล้วเข้าระบบ (สร้างห้องใหม่ให้ถ้ายังไม่มี) */
+function commitEntries(list) {
+  const db = store.db;
+  const added = [], failed = [], results = [];
+  const createdRooms = [];
+  for (const e of list) {
+    try {
+      let roomId = e.roomId && db.rooms.some((r) => r.id === e.roomId) ? e.roomId : null;
+      const roomName = String(e.newRoomName || e.roomName || '').trim();
+      if (!roomId && roomName) {
+        let room = vision.findRoom(db.rooms, roomName);
+        if (!room) {
+          room = { id: store.uid(), ...cleanRoom({ name: roomName, color: CLASS_COLORS[db.rooms.length % CLASS_COLORS.length] }) };
+          db.rooms.push(room);
+          createdRooms.push(room.name);
+        }
+        roomId = room.id;
+      }
+      const same = db.classes.find((c) => c.subject.trim().toLowerCase() === String(e.subject).trim().toLowerCase());
+      const used = new Set(db.classes.map((c) => c.color));
+      const color = e.color || same?.color || CLASS_COLORS.find((c) => !used.has(c)) || CLASS_COLORS[db.classes.length % CLASS_COLORS.length];
+      const item = { id: store.uid(), ...cleanClass({ ...e, roomId, color, reminderEnabled: true, reminderMinutes: null, note: e.note || '' }) };
+      db.classes.push(item);
+      added.push(item);
+      results.push({ ok: true, id: item.id });
+    } catch (err) {
+      failed.push({ subject: e.subject, error: err.message });
+      results.push({ ok: false, error: err.message });
+    }
+  }
+  store.save();
+  return { added, failed, createdRooms, results };
+}
+
+app.post('/api/vision/analyze', (req, res) => {
+  imageUpload.single('image')(req, res, async (err) => {
+    if (err) return res.status(400).json({ error: err.code === 'LIMIT_FILE_SIZE' ? 'รูปใหญ่เกิน 10MB' : err.message });
+    if (!req.file) return res.status(400).json({ error: 'กรุณาเลือกรูปตารางสอน' });
+    try {
+      const result = await vision.extractFromImage(store.db.settings, {
+        data: req.file.buffer.toString('base64'), mediaType: req.file.mimetype, hint: req.body.hint,
+      });
+      const entries = vision.review(result.entries, store.db);
+      let commit = null;
+      if (req.body.auto === '1') {
+        const ok = entries.filter((e) => e.status === 'ok');
+        commit = commitEntries(ok);
+        ok.forEach((e) => { e.status = 'added'; });
+      }
+      res.json({ entries, warnings: result.warnings, model: result.model, commit });
+    } catch (e) {
+      console.error('[vision]', e.message);
+      res.status(e.status || 500).json({ error: e.message });
+    }
+  });
+});
+
+app.post('/api/vision/commit', (req, res) => {
+  const list = Array.isArray(req.body?.entries) ? req.body.entries.slice(0, 200) : null;
+  if (!list || !list.length) return res.status(400).json({ error: 'ไม่มีรายการที่จะเพิ่ม' });
+  res.json(commitEntries(list));
 });
 
 // ---------- Backup ----------

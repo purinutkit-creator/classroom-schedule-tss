@@ -31,6 +31,7 @@ const DEFAULT_DB = () => ({
       autoAddFollowers: true,
       replyKeywords: true,
     },
+    ai: { apiKey: '' },
   },
   rooms: [],
   classes: [],
@@ -51,6 +52,7 @@ function normalize(raw) {
       ...(raw.settings || {}),
       font: { ...base.settings.font, ...((raw.settings || {}).font || {}) },
       line: { ...base.settings.line, ...((raw.settings || {}).line || {}) },
+      ai: { ...base.settings.ai, ...((raw.settings || {}).ai || {}) },
     },
   };
 }

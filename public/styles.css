@@ -293,3 +293,39 @@ select.sm { width: auto; margin: 0; padding: 6px 10px; font-size: 13px; max-widt
 .tt-times div:first-child { transform: none; }
 .hero > div + div { margin-top: 18px; }
 .tt-block b { padding-right: 34px; }
+
+/* ---------- v2.0: เพิ่มจากรูป ---------- */
+.ver { font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 99px; background: var(--accent-soft); color: var(--accent); vertical-align: middle; letter-spacing: .02em; }
+.vs-drop { min-height: 320px; justify-content: center; position: relative; overflow: hidden; padding: 12px; }
+.vs-drop img { max-width: 100%; max-height: 420px; border-radius: 12px; object-fit: contain; }
+.vs-how { font-size: 14px; color: var(--text); padding-left: 0; list-style: none; display: grid; gap: 8px; margin-bottom: 16px; }
+.vs-how li { padding: 10px 12px; border-radius: 12px; background: var(--surface-2); }
+.vs-step { animation: fade .25s ease; }
+#vs-loading { text-align: center; padding: 20px 0 30px; }
+.vs-scan { position: relative; width: min(360px, 100%); margin: 0 auto 20px; border-radius: 16px; overflow: hidden; box-shadow: var(--shadow); }
+.vs-scan img { display: block; width: 100%; max-height: 300px; object-fit: cover; filter: saturate(.6) brightness(1.05); }
+.vs-scan i { position: absolute; left: 0; right: 0; height: 70px; background: linear-gradient(transparent, var(--accent-mid), transparent); border-bottom: 2px solid var(--accent); animation: scan 1.6s ease-in-out infinite alternate; }
+@keyframes scan { from { top: -70px; } to { top: 100%; } }
+.vs-summary { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.vs-summary span { font-size: 13px; font-weight: 600; padding: 6px 12px; border-radius: 99px; background: var(--surface-2); }
+.vs-warn { font-size: 13px; padding: 10px 12px; border-radius: 12px; background: rgba(245,158,11,.12); color: #b45309; margin-bottom: 8px; }
+.vs-table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 14px; }
+.vs-table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 900px; }
+.vs-table th { text-align: left; font-size: 12px; color: var(--muted); font-weight: 600; padding: 10px 8px; background: var(--surface-2); position: sticky; top: 0; }
+.vs-table td { padding: 6px 8px; border-top: 1px solid var(--border); vertical-align: top; }
+.vs-table input:not([type=checkbox]), .vs-table select { margin: 0; padding: 6px 8px; font-size: 13px; border-radius: 8px; }
+.vs-table input[type=checkbox] { width: 18px; height: 18px; margin: 6px 0 0; accent-color: var(--accent); }
+.vs-table tr.off td { opacity: .5; }
+.vs-table .t2 { display: flex; gap: 4px; align-items: center; }
+.vs-table .t2 input { width: 122px; }
+.vs-table select { min-width: 104px; }
+.vs-table .why { font-size: 11px; color: var(--muted); margin-top: 4px; max-width: 220px; }
+.vs-table .newroom { font-size: 11px; color: var(--accent); margin-top: 3px; }
+.st { display: inline-block; font-size: 11px; font-weight: 700; padding: 3px 9px; border-radius: 99px; white-space: nowrap; }
+.st.ok { background: color-mix(in srgb, var(--ok) 14%, transparent); color: var(--ok); }
+.st.added { background: var(--ok); color: #fff; }
+.st.duplicate { background: var(--surface-2); color: var(--muted); }
+.st.conflict { background: rgba(245,158,11,.15); color: #b45309; }
+.st.invalid { background: color-mix(in srgb, var(--danger) 12%, transparent); color: var(--danger); }
+.conf-low { box-shadow: inset 3px 0 0 #f59e0b; }
+dialog .toasts { position: fixed; }
