@@ -21,6 +21,7 @@
       <input type="password" name="password" placeholder="รหัสผ่าน" autocomplete="current-password" required />
       <button class="btn primary block" type="submit">เข้าสู่ระบบ</button>
       <p class="error" id="login-error"></p>
+      <p class="muted small"><a href="/privacy">นโยบายความเป็นส่วนตัว</a> · <a href="/terms">ข้อกำหนดการใช้บริการ</a></p>
     </form>
   </div>
 
@@ -40,6 +41,7 @@
         <a href="#line" data-page="line"><span class="ico">💬</span><span>LINE OA</span></a>
         <a href="#settings" data-page="settings"><span class="ico">⚙️</span><span>ตั้งค่า</span></a>
       </nav>
+      <div class="legal-links"><a href="/privacy" target="_blank">นโยบายความเป็นส่วนตัว</a> · <a href="/terms" target="_blank">ข้อกำหนด</a></div>
       <div class="sidebar-foot">
         <div class="clock" id="clock">--:--</div>
         <div class="muted small" id="clock-date"></div>
@@ -140,6 +142,12 @@
               <label>Webhook URL
                 <div class="input-copy"><input type="text" id="webhook-url" readonly /><button type="button" class="btn" data-copy="#webhook-url">คัดลอก</button></div>
               </label>
+              <label>นโยบายความเป็นส่วนตัว (Privacy policy URL)
+                <div class="input-copy"><input type="text" id="privacy-url" readonly /><button type="button" class="btn" data-copy="#privacy-url">คัดลอก</button><a class="btn" href="/privacy" target="_blank">เปิด</a></div>
+              </label>
+              <label>ข้อกำหนดการใช้บริการ (Terms of use URL)
+                <div class="input-copy"><input type="text" id="terms-url" readonly /><button type="button" class="btn" data-copy="#terms-url">คัดลอก</button><a class="btn" href="/terms" target="_blank">เปิด</a></div>
+              </label>
               <div class="row gap wrap">
                 <button class="btn primary" type="submit">บันทึก</button>
                 <button class="btn" type="button" id="line-verify">ทดสอบการเชื่อมต่อ</button>
@@ -185,6 +193,7 @@
             <div class="card-head"><h3>ทั่วไป</h3></div>
             <label>ชื่อระบบ<input name="appName" maxlength="40" /></label>
             <label>ชื่อโรงเรียน / หน่วยงาน<input name="schoolName" maxlength="80" /></label>
+            <label>อีเมลติดต่อ (แสดงในนโยบายความเป็นส่วนตัว)<input type="email" name="contactEmail" maxlength="120" placeholder="admin@school.ac.th" /></label>
             <label>โซนเวลา<select name="timezone" id="tz-select"></select></label>
             <div class="card-head mt"><h3>ตารางเวลา</h3></div>
             <div class="field-label">วันที่แสดงในตาราง</div>

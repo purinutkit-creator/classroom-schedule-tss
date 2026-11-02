@@ -16,6 +16,7 @@ const DEFAULT_DB = () => ({
   settings: {
     appName: 'ตารางสอน',
     schoolName: '',
+    contactEmail: '',
     timezone: 'Asia/Bangkok',
     defaultReminderMinutes: 10,
     remindersEnabled: true,

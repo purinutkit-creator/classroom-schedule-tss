@@ -109,6 +109,12 @@ app.get('/theme.css', (req, res) => {
 const cssStr = (s) => String(s).replace(/['"\\<>;{}]/g, '');
 
 // ---------- Auth ----------
+// ข้อมูลสาธารณะสำหรับหน้านโยบายความเป็นส่วนตัว / ข้อกำหนดการใช้บริการ (ไม่ต้องล็อกอิน)
+app.get('/public-info.json', (req, res) => {
+  const s = store.db.settings;
+  res.set('Cache-Control', 'no-cache').json({ appName: s.appName, schoolName: s.schoolName || '', contactEmail: s.contactEmail || '', url: publicUrl(req) });
+});
+
 app.get('/api/auth', (req, res) => res.json({ required: !!ADMIN_PASSWORD, ok: !ADMIN_PASSWORD || req.get('authorization') === `Bearer ${AUTH_TOKEN}` }));
 app.post('/api/login', (req, res) => {
   if (!ADMIN_PASSWORD) return res.json({ token: '' });
@@ -159,7 +165,11 @@ const pick = (obj, keys) => Object.fromEntries(keys.filter((k) => obj[k] !== und
 app.put('/api/settings', (req, res) => {
   const s = store.db.settings;
   const b = req.body || {};
-  const next = pick(b, ['appName', 'schoolName', 'timezone', 'defaultReminderMinutes', 'remindersEnabled', 'visibleDays', 'dayStart', 'dayEnd', 'accentColor']);
+  const next = pick(b, ['appName', 'schoolName', 'contactEmail', 'timezone', 'defaultReminderMinutes', 'remindersEnabled', 'visibleDays', 'dayStart', 'dayEnd', 'accentColor']);
+  if (next.contactEmail !== undefined) {
+    next.contactEmail = String(next.contactEmail).trim().slice(0, 120);
+    if (next.contactEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(next.contactEmail)) return res.status(400).json({ error: 'อีเมลติดต่อไม่ถูกต้อง' });
+  }
   if (next.timezone && !isValidTimeZone(next.timezone)) return res.status(400).json({ error: 'โซนเวลาไม่ถูกต้อง' });
   for (const k of ['dayStart', 'dayEnd']) if (next[k] && !isValidTime(next[k])) return res.status(400).json({ error: 'รูปแบบเวลาไม่ถูกต้อง' });
   if (next.dayStart && next.dayEnd && toMin(next.dayEnd) <= toMin(next.dayStart)) return res.status(400).json({ error: 'เวลาสิ้นสุดต้องหลังเวลาเริ่ม' });

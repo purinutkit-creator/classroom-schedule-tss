@@ -329,3 +329,9 @@ select.sm { width: auto; margin: 0; padding: 6px 10px; font-size: 13px; max-widt
 .st.invalid { background: color-mix(in srgb, var(--danger) 12%, transparent); color: var(--danger); }
 .conf-low { box-shadow: inset 3px 0 0 #f59e0b; }
 dialog .toasts { position: fixed; }
+
+.legal-links { margin-top: auto; padding: 0 8px; font-size: 12px; color: var(--muted); text-align: center; }
+.legal-links a { color: var(--muted); text-decoration: none; }
+.legal-links a:hover { color: var(--accent); }
+.legal-links + .sidebar-foot { margin-top: 10px; }
+@media (max-width: 820px) { .legal-links { display: none; } }

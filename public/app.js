@@ -351,6 +351,9 @@
     f.channelAccessToken.placeholder = l.hasToken ? `บันทึกแล้ว ${l.tokenHint}${l.fromEnv ? ' (จาก .env)' : ''} — ใส่ใหม่เพื่อเปลี่ยน` : 'วางโทเคนที่นี่';
     f.channelSecret.placeholder = l.hasSecret ? `บันทึกแล้ว ${l.secretHint} — ใส่ใหม่เพื่อเปลี่ยน` : 'วาง secret ที่นี่';
     $('#webhook-url').value = S.webhookUrl;
+    const site = S.webhookUrl.replace(/\/webhook\/line$/, '');
+    $('#privacy-url').value = site + '/privacy';
+    $('#terms-url').value = site + '/terms';
     const m = $('#line-mode-form');
     m.querySelector(`[name=sendMode][value=${l.sendMode}]`).checked = true;
     m.autoAddFollowers.checked = l.autoAddFollowers;
@@ -381,7 +384,7 @@
   function renderSettings() {
     const s = S.settings;
     const f = $('#settings-form');
-    f.appName.value = s.appName; f.schoolName.value = s.schoolName || '';
+    f.appName.value = s.appName; f.schoolName.value = s.schoolName || ''; f.contactEmail.value = s.contactEmail || '';
     const tzs = TIMEZONES.includes(s.timezone) ? TIMEZONES : [s.timezone, ...TIMEZONES];
     $('#tz-select').innerHTML = tzs.map((t) => `<option ${t === s.timezone ? 'selected' : ''}>${t}</option>`).join('');
     f.dayStart.value = s.dayStart; f.dayEnd.value = s.dayEnd;
@@ -625,7 +628,7 @@
       const visibleDays = selectedDays($('#day-picker'));
       if (!visibleDays.length) throw new Error('เลือกอย่างน้อย 1 วัน');
       S.settings = await api('/api/settings', { method: 'PUT', body: {
-        appName: f.appName.value.trim() || 'ตารางสอน', schoolName: f.schoolName.value.trim(), timezone: f.timezone.value,
+        appName: f.appName.value.trim() || 'ตารางสอน', schoolName: f.schoolName.value.trim(), contactEmail: f.contactEmail.value.trim(), timezone: f.timezone.value,
         dayStart: f.dayStart.value, dayEnd: f.dayEnd.value, remindersEnabled: f.remindersEnabled.checked,
         defaultReminderMinutes: Number(f.defaultReminderMinutes.value), visibleDays, accentColor: selectedSwatch($('#accent-swatches')),
       } });
