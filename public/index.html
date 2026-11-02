@@ -30,13 +30,15 @@
       <div class="brand">
         <div class="brand-logo">📚</div>
         <div>
-          <div class="brand-name"><span data-bind="appName">ตารางสอน</span> <span class="ver">v2.0</span></div>
+          <div class="brand-name"><span data-bind="appName">ตารางสอน</span> <span class="ver">v3.0</span></div>
           <div class="brand-sub" data-bind="schoolName">Classroom Schedule</div>
         </div>
       </div>
       <nav class="nav" id="nav">
         <a href="#dashboard" data-page="dashboard"><span class="ico">🏠</span><span>ภาพรวม</span></a>
         <a href="#timetable" data-page="timetable"><span class="ico">🗓️</span><span>ตารางสอน</span></a>
+        <a href="#groups" data-page="groups"><span class="ico">🎓</span><span>ชั้นเรียน</span></a>
+        <a href="#calendar" data-page="calendar"><span class="ico">📆</span><span>วันพิเศษ</span></a>
         <a href="#rooms" data-page="rooms"><span class="ico">📍</span><span>ห้องเรียน</span></a>
         <a href="#line" data-page="line"><span class="ico">💬</span><span>LINE OA</span></a>
         <a href="#settings" data-page="settings"><span class="ico">⚙️</span><span>ตั้งค่า</span></a>
@@ -61,6 +63,7 @@
             <button class="btn primary" data-action="new-class">＋ เพิ่มคาบเรียน</button>
           </div>
         </header>
+        <div id="special-banner"></div>
         <div class="grid-2">
           <div class="card hero" id="now-card"></div>
           <div class="card">
@@ -87,7 +90,8 @@
             <h1>ตารางสอน</h1>
             <p class="muted">แตะช่องว่างเพื่อเพิ่มคาบ แตะคาบเพื่อแก้ไข</p>
           </div>
-          <div class="row gap">
+          <div class="row gap wrap">
+            <select id="tt-group" class="group-select" title="เลือกชั้นเรียน"></select>
             <div class="seg" id="tt-view">
               <button data-view="week" class="active">สัปดาห์</button>
               <button data-view="list">รายการ</button>
@@ -100,6 +104,66 @@
           <div class="timetable" id="timetable"></div>
         </div>
         <div id="class-list" class="class-list hidden"></div>
+      </section>
+
+      <!-- ชั้นเรียน (ม./ห้อง) -->
+      <section class="page" id="page-groups">
+        <header class="page-head">
+          <div>
+            <h1>ชั้นเรียน</h1>
+            <p class="muted">กำหนด ม./ห้อง แล้วผูกบัญชี LINE ของนักเรียนหรือกลุ่มห้องเข้ากับชั้นเรียน ตารางสอน การแจ้งเตือน และริชเมนูจะแยกตามห้องให้อัตโนมัติ</p>
+          </div>
+          <div class="row gap wrap">
+            <button class="btn" id="group-bulk-btn">⚡ สร้างหลายห้อง</button>
+            <button class="btn primary" data-action="new-group">＋ เพิ่มชั้นเรียน</button>
+          </div>
+        </header>
+        <div class="group-grid" id="group-grid"></div>
+        <div class="card mt" id="assign-card">
+          <div class="card-head"><h3>ผูกบัญชี LINE กับชั้นเรียน</h3><span class="chip" id="unassigned-count"></span></div>
+          <p class="muted small">ผู้รับที่เพิ่มเพื่อน OA หรือเชิญบอทเข้ากลุ่มจะขึ้นที่นี่ เลือกชั้นเรียนให้แต่ละบัญชี แล้วริชเมนูของผู้ใช้จะเปลี่ยนเป็นของห้องนั้นทันที</p>
+          <div class="row gap wrap mb">
+            <input type="search" id="assign-search" placeholder="🔎 ค้นหาชื่อ" class="grow" />
+            <select id="assign-filter" class="group-select"><option value="">ทั้งหมด</option><option value="__none">ยังไม่ระบุห้อง</option></select>
+          </div>
+          <div id="assign-list" class="recipients"></div>
+        </div>
+      </section>
+
+      <!-- วันพิเศษ -->
+      <section class="page" id="page-calendar">
+        <header class="page-head">
+          <div>
+            <h1>วันพิเศษ</h1>
+            <p class="muted">วันหยุดพิเศษ ปิดภาคเรียน และวันกิจกรรม (มีผลทั้งโรงเรียน) ระบบจะงดแจ้งเตือนคาบเรียน แสดง “พรุ่งนี้หยุด” บนริชเมนู และประกาศทุกเช้าในช่วงวันหยุด</p>
+          </div>
+          <button class="btn primary" data-action="new-special">＋ เพิ่มวันพิเศษ</button>
+        </header>
+        <div class="grid-2 align-start">
+          <div class="stack">
+            <div class="card">
+              <div class="card-head"><h3>ปฏิทิน</h3>
+                <div class="row gap"><button class="icon-btn" id="cal-prev">‹</button><b id="cal-title"></b><button class="icon-btn" id="cal-next">›</button></div>
+              </div>
+              <div class="month" id="month"></div>
+              <div class="legend" id="legend"></div>
+            </div>
+            <div class="card">
+              <div class="card-head"><h3>รายการวันพิเศษ</h3></div>
+              <div id="special-list" class="special-list"></div>
+            </div>
+          </div>
+          <form class="card sticky" id="announce-form">
+            <div class="card-head"><h3>📢 ประกาศวันหยุดอัตโนมัติ</h3></div>
+            <label class="switch-row"><span>ส่งประกาศทุกเช้าในช่วงวันหยุด/วันพิเศษ</span><input type="checkbox" class="switch" name="announceEnabled" /></label>
+            <label>เวลาส่งประกาศ<input type="time" name="announceTime" /></label>
+            <label class="switch-row"><span>แจ้งล่วงหน้า 1 วัน (วันก่อนเริ่มหยุด เวลาเดียวกัน)</span><input type="checkbox" class="switch" name="announceEve" /></label>
+            <p class="muted small">ส่งถึงทั้งโรงเรียน: ถ้าโหมดการส่งเป็น Broadcast จะส่งถึงเพื่อนทุกคนและกลุ่ม LINE ทุกกลุ่ม ถ้าเป็นโหมดเลือกผู้รับจะส่งถึงผู้รับที่เปิดไว้ทั้งหมด</p>
+            <button class="btn primary" type="submit">บันทึก</button>
+            <div class="field-label mt">ตัวอย่างประกาศ</div>
+            <div class="phone mini"><div class="phone-chat" id="announce-preview"></div></div>
+          </form>
+        </div>
       </section>
 
       <!-- ห้องเรียน -->
@@ -166,6 +230,21 @@
               <div class="card-head mt"><h4>ผู้รับ</h4><button type="button" class="btn sm" id="add-recipient">＋ เพิ่ม ID</button></div>
               <div id="recipients" class="recipients"></div>
             </form>
+
+            <div class="card" id="richmenu-card">
+              <div class="card-head"><h3>3. ริชเมนูรายวัน</h3><span class="badge" id="rm-badge">ปิดอยู่</span></div>
+              <p class="muted small">ระบบสร้างริชเมนูใหม่ทุกวันตอนเที่ยงคืน แยกตามชั้นเรียน สีตามวัน มีวันที่และชื่อวัน และแสดง “พรุ่งนี้หยุด” เมื่อวันถัดไปเป็นวันหยุด เมื่อแก้ตาราง ชั้นเรียน หรือวันพิเศษ ระบบจะสร้างใหม่ให้อัตโนมัติ</p>
+              <label class="switch-row"><span><b>เปิดใช้ริชเมนูรายวัน</b></span><input type="checkbox" class="switch" id="rm-enabled" /></label>
+              <label class="switch-row"><span>เปิดเมนูค้างไว้เมื่อเข้าแชท</span><input type="checkbox" class="switch" id="rm-selected" /></label>
+              <div class="row gap wrap mb">
+                <select id="rm-group" class="group-select"></select>
+                <input type="date" id="rm-date" class="date-in" />
+                <button type="button" class="btn sm" id="rm-tomorrow">ดูพรุ่งนี้</button>
+              </div>
+              <div class="rm-preview"><img id="rm-img" alt="ตัวอย่างริชเมนู" /><div id="rm-loading" class="muted small">กำลังสร้างตัวอย่าง…</div></div>
+              <p class="small" id="rm-status"></p>
+              <button type="button" class="btn primary" id="rm-rebuild">🔄 สร้างและอัปเดตริชเมนูตอนนี้</button>
+            </div>
           </div>
 
           <div class="card sticky">
@@ -297,6 +376,7 @@
             <label class="grow">เริ่ม<input type="time" name="start" required /></label>
             <label class="grow">เลิก<input type="time" name="end" required /></label>
           </div>
+          <label>ชั้นเรียน (ม./ห้อง)<select name="groupId" id="class-group"></select></label>
           <label>ห้องเรียน<select name="roomId" id="class-room"></select></label>
           <label>หมายเหตุ (แสดงในข้อความแจ้งเตือน)<textarea name="note" rows="2" maxlength="400" placeholder="เช่น นำหนังสือเล่ม 2 มาด้วย"></textarea></label>
           <div class="field-label">สี</div>
@@ -389,6 +469,7 @@
                 <li>🔍 ระบบตรวจสอบเวลาผิด คาบซ้ำ คาบชน และจับคู่ห้องที่มีอยู่</li>
                 <li>✅ เพิ่มเข้าตารางพร้อมแจ้งเตือน LINE ทันที</li>
               </ol>
+              <label>เพิ่มเข้าชั้นเรียน<select id="vs-group"></select></label>
               <label>ข้อมูลเพิ่มเติม (ไม่บังคับ)
                 <textarea id="vs-hint" rows="3" maxlength="1000" placeholder="เช่น คาบ 1 เริ่ม 08:30 คาบละ 50 นาที พักเที่ยงหลังคาบ 4 / ไม่ต้องเอาคาบโฮมรูม"></textarea>
               </label>
@@ -418,6 +499,75 @@
         <span class="grow muted small" id="vs-foot-note"></span>
         <button type="button" class="btn primary" id="vs-analyze" disabled>✨ อ่านตาราง</button>
         <button type="button" class="btn primary" id="vs-commit" hidden>เพิ่มรายการที่เลือก</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <!-- Modal: ชั้นเรียน -->
+  <dialog id="group-dialog" class="dialog narrow">
+    <form method="dialog" id="group-form">
+      <header class="dialog-head"><h2 id="group-dialog-title">เพิ่มชั้นเรียน</h2><button type="button" class="icon-btn" data-close>✕</button></header>
+      <div class="dialog-body">
+        <label>ชื่อชั้นเรียน *<input name="name" required maxlength="40" placeholder="เช่น ม.4/1" /></label>
+        <label>หมายเหตุ (แสดงในเมนู “ห้องของฉัน”)<input name="note" maxlength="200" placeholder="เช่น ครูประจำชั้น: ครูมาลี" /></label>
+      </div>
+      <footer class="dialog-foot">
+        <button type="button" class="btn danger ghost" id="group-delete">ลบ</button>
+        <span class="grow"></span>
+        <button type="submit" class="btn primary">บันทึก</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <!-- Modal: สร้างหลายห้อง -->
+  <dialog id="bulk-dialog" class="dialog narrow">
+    <form method="dialog" id="bulk-form">
+      <header class="dialog-head"><h2>⚡ สร้างหลายชั้นเรียน</h2><button type="button" class="icon-btn" data-close>✕</button></header>
+      <div class="dialog-body">
+        <div class="row gap">
+          <label class="grow">ระดับ<select name="prefix"><option value="ม.">ม. (มัธยม)</option><option value="ป.">ป. (ประถม)</option><option value="อ.">อ. (อนุบาล)</option><option value="ปวช.">ปวช.</option><option value="ปวส.">ปวส.</option></select></label>
+          <label class="grow">ตั้งแต่ชั้น<input type="number" name="from" min="1" max="12" value="1" /></label>
+          <label class="grow">ถึงชั้น<input type="number" name="to" min="1" max="12" value="6" /></label>
+          <label class="grow">ห้องละ<input type="number" name="rooms" min="1" max="30" value="3" /></label>
+        </div>
+        <div class="field-label">จะสร้าง</div>
+        <div class="bulk-preview" id="bulk-preview"></div>
+      </div>
+      <footer class="dialog-foot"><span class="grow muted small">ชั้นที่มีอยู่แล้วจะข้ามไป</span><button type="submit" class="btn primary">สร้าง</button></footer>
+    </form>
+  </dialog>
+
+  <!-- Modal: วันพิเศษ -->
+  <dialog id="special-dialog" class="dialog">
+    <form method="dialog" id="special-form">
+      <header class="dialog-head" id="special-head"><h2 id="special-dialog-title">เพิ่มวันพิเศษ</h2><button type="button" class="icon-btn" data-close>✕</button></header>
+      <div class="dialog-body two-col">
+        <div>
+          <div class="field-label">ประเภท</div>
+          <div class="type-picker" id="special-type">
+            <button type="button" data-type="holiday"><b>🎌 วันหยุดพิเศษ</b><span>หยุดทั้งโรงเรียน</span></button>
+            <button type="button" data-type="semester_break"><b>🏖️ ปิดภาคเรียน</b><span>ช่วงปิดเทอม</span></button>
+            <button type="button" data-type="activity"><b>🏅 วันกิจกรรม</b><span>กีฬาสี ทัศนศึกษา ฯลฯ</span></button>
+          </div>
+          <label>ชื่อ *<input name="name" required maxlength="80" placeholder="เช่น วันลอยกระทง" /></label>
+          <div class="row gap">
+            <label class="grow">ตั้งแต่วันที่<input type="date" name="start" required /></label>
+            <label class="grow">ถึงวันที่<input type="date" name="end" required /></label>
+          </div>
+          <p class="muted small" id="special-span"></p>
+          <label class="switch-row" id="suspend-row"><span>งดการเรียนปกติ (ไม่แจ้งเตือนคาบเรียน)</span><input type="checkbox" class="switch" name="suspendClasses" /></label>
+          <label>หมายเหตุ (แสดงในประกาศ)<textarea name="note" rows="2" maxlength="300" placeholder="เช่น นักเรียนแต่งชุดพละมาโรงเรียน"></textarea></label>
+        </div>
+        <div>
+          <div class="field-label">ตัวอย่างประกาศใน LINE</div>
+          <div class="phone mini"><div class="phone-chat" id="special-preview"></div></div>
+        </div>
+      </div>
+      <footer class="dialog-foot">
+        <button type="button" class="btn danger ghost" id="special-delete">ลบ</button>
+        <span class="grow"></span>
+        <button type="button" class="btn" id="special-test">ส่งทดสอบ</button>
+        <button type="submit" class="btn primary">บันทึก</button>
       </footer>
     </form>
   </dialog>

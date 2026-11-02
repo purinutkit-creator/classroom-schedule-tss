@@ -16,6 +16,24 @@
   let token = localStorage.getItem('tt-token') || '';
   let S = null; // state จากเซิร์ฟเวอร์
   let view = localStorage.getItem('tt-view') || 'week';
+  let ttGroup = localStorage.getItem('tt-group') || '';
+  const SP_TYPES = {
+    holiday: { label: 'วันหยุดพิเศษ', color: '#e11d48', icon: '🎌' },
+    semester_break: { label: 'ปิดภาคเรียน', color: '#7c3aed', icon: '🏖️' },
+    activity: { label: 'วันกิจกรรม', color: '#ea580c', icon: '🏅' },
+  };
+  const TH_MONTHS = ['มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน', 'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'];
+  const TH_MON = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'];
+  // วันที่แบบ YYYY-MM-DD (ไม่ขึ้นกับโซนเวลาเครื่อง)
+  const kd = (key) => { const [y, m, d] = key.split('-').map(Number); return new Date(Date.UTC(y, m - 1, d)); };
+  const keyOf = (dt) => dt.toISOString().slice(0, 10);
+  const shiftKey = (key, n) => { const d = kd(key); d.setUTCDate(d.getUTCDate() + n); return keyOf(d); };
+  const thDate = (key, short) => { const d = kd(key); return `${d.getUTCDate()} ${(short ? TH_MON : TH_MONTHS)[d.getUTCMonth()]} ${d.getUTCFullYear() + 543}`; };
+  const thRange = (a, b) => (a === b ? thDate(a, true) : `${thDate(a, true)} – ${thDate(b, true)}`);
+  const daysBetween = (a, b) => Math.round((kd(b) - kd(a)) / 86400000);
+  const specialOn = (key) => { const hits = S.specialDays.filter((x) => x.start <= key && key <= x.end); return hits.find((x) => x.suspendClasses !== false) || hits[0] || null; };
+  const groupOf = (id) => S.groups.find((g) => g.id === id);
+  const groupOptions = (sel, { all, none } = {}) => (all ? `<option value="">${all}</option>` : '') + (none ? `<option value="">${none}</option>` : '') + S.groups.map((g) => `<option value="${g.id}" ${g.id === sel ? 'selected' : ''}>${esc(g.name)}</option>`).join('');
 
   // ---------------- API ----------------
   async function api(path, opts = {}) {
@@ -57,15 +75,19 @@
   const navUrl = (room) => room && room.lat != null ? `https://www.google.com/maps/dir/?api=1&destination=${room.lat},${room.lng}&travelmode=walking` : room?.mapUrl || '';
   const reminderOf = (c) => (c.reminderMinutes == null ? S.settings.defaultReminderMinutes : c.reminderMinutes);
   const classesOn = (d) => S.classes.filter((c) => c.day === d).sort((a, b) => toMin(a.start) - toMin(b.start));
+  // ตารางที่กำลังดู: คาบของชั้นที่เลือก + คาบที่ใช้ร่วมทุกห้อง
+  const ttClassesOn = (d) => classesOn(d).filter((c) => !ttGroup || !c.groupId || c.groupId === ttGroup);
+  const gchip = (c) => (S.groups.length ? (c.groupId && groupOf(c.groupId) ? `<span class="gchip">${esc(groupOf(c.groupId).name)}</span>` : '<span class="gchip all">ทุกห้อง</span>') : '');
 
   // ---------------- Router ----------------
   function route() {
     const page = (location.hash || '#dashboard').slice(1);
-    const valid = ['dashboard', 'timetable', 'rooms', 'line', 'settings'].includes(page) ? page : 'dashboard';
+    const valid = ['dashboard', 'timetable', 'groups', 'calendar', 'rooms', 'line', 'settings'].includes(page) ? page : 'dashboard';
     $$('.page').forEach((p) => p.classList.toggle('active', p.id === `page-${valid}`));
     $$('#nav a').forEach((a) => a.classList.toggle('active', a.dataset.page === valid));
     if (valid === 'rooms') setTimeout(renderOverviewMap, 50);
-    if (valid === 'line') renderPreview();
+    if (valid === 'line') { renderPreview(); loadRichMenuPreview(); }
+    if (valid === 'calendar') renderAnnouncePreview();
     window.scrollTo(0, 0);
   }
 
@@ -78,8 +100,11 @@
     $('meta[name=theme-color]').content = S.settings.accentColor;
     renderDashboard();
     renderTimetable();
+    renderGroups();
+    renderCalendar();
     renderRooms();
     renderLine();
+    renderRichMenu();
     renderSettings();
   }
 
@@ -97,12 +122,21 @@
       const url = navUrl(room);
       return `<div class="tl-item ${live ? 'live' : ''} ${past ? 'past' : ''}" style="--c:${c.color}" data-edit-class="${c.id}">
         <div class="tl-time"><b>${c.start}</b><span>${c.end}</span></div>
-        <div><div class="tl-sub">${live ? '🔴 ' : ''}${esc(c.subject)}</div><div class="tl-room">📍 ${esc(room?.name || 'ยังไม่ระบุห้อง')}${c.teacher ? ` · ${esc(c.teacher)}` : ''}</div></div>
+        <div><div class="tl-sub">${live ? '🔴 ' : ''}${esc(c.subject)} ${gchip(c)}</div><div class="tl-room">📍 ${esc(room?.name || 'ยังไม่ระบุห้อง')}${c.teacher ? ` · ${esc(c.teacher)}` : ''}</div></div>
         ${url ? `<a class="nav-pill" href="${esc(url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">🧭 นำทาง</a>` : '<span></span>'}
       </div>`;
     }).join('') : '<div class="empty"><span class="big">🎉</span>วันนี้ไม่มีคาบเรียน</div>';
 
     renderNowCard();
+    // แถบวันพิเศษ: วันนี้ / พรุ่งนี้
+    const spToday = specialOn(S.todayKey), spTomorrow = specialOn(shiftKey(S.todayKey, 1));
+    const sp = spToday || spTomorrow;
+    $('#special-banner').innerHTML = sp ? (() => {
+      const t = SP_TYPES[sp.type] || SP_TYPES.holiday;
+      const off = sp.suspendClasses !== false;
+      const head = spToday ? (off ? 'วันนี้หยุดเรียน' : `วันนี้${t.label}`) : (off ? 'พรุ่งนี้หยุดเรียน' : `พรุ่งนี้${t.label}`);
+      return `<div class="special-banner" style="--sc:${t.color}"><span class="big">${t.icon}</span><div><b>${head}: ${esc(sp.name)}</b><span>${thRange(sp.start, sp.end)}${off ? ' · งดแจ้งเตือนคาบเรียน' : ''}</span></div><a href="#calendar">ดูปฏิทิน ›</a></div>`;
+    })() : '';
 
     const l = S.settings.line;
     const enabled = S.recipients.filter((r) => r.enabled).length;
@@ -110,12 +144,14 @@
       { ok: l.hasToken && l.hasSecret, t: 'LINE OA', d: l.hasToken && l.hasSecret ? `เชื่อมต่อแล้ว · โหมด ${l.sendMode === 'push' ? `เลือกผู้รับ (${enabled})` : 'Broadcast'}` : 'ยังไม่ได้ใส่ Token / Secret', link: '#line' },
       { ok: S.settings.remindersEnabled, t: 'แจ้งเตือนอัตโนมัติ', d: S.settings.remindersEnabled ? `เปิดอยู่ · ค่าเริ่มต้น ${S.settings.defaultReminderMinutes} นาทีก่อนเริ่ม` : 'ปิดอยู่', link: '#settings' },
       { ok: S.rooms.length > 0 && S.rooms.every((r) => r.lat != null || r.mapUrl), t: 'ตำแหน่งห้องเรียน', d: `${S.rooms.filter((r) => r.lat != null || r.mapUrl).length}/${S.rooms.length} ห้องปักหมุดแล้ว`, link: '#rooms' },
-      { ok: S.classes.length > 0, t: 'ตารางสอน', d: `${S.classes.length} คาบต่อสัปดาห์`, link: '#timetable' },
+      { ok: S.classes.length > 0, t: 'ตารางสอน', d: `${S.classes.length} คาบต่อสัปดาห์${S.groups.length ? ` · ${S.groups.length} ชั้นเรียน` : ''}`, link: '#timetable' },
+      { ok: !S.groups.length || S.recipients.filter((r) => !r.left && !r.groupId).length === 0, t: 'ชั้นเรียนของผู้รับ', d: S.groups.length ? `${S.recipients.filter((r) => !r.left && r.groupId).length}/${S.recipients.filter((r) => !r.left).length} บัญชีผูกกับ ม./ห้องแล้ว` : 'ยังไม่ได้สร้างชั้นเรียน', link: '#groups' },
+      { ok: !!S.settings.richMenu?.enabled && !S.settings.richMenu?.lastError, t: 'ริชเมนูรายวัน', d: S.settings.richMenu?.enabled ? (S.settings.richMenu.lastError ? `ผิดพลาด: ${S.settings.richMenu.lastError}` : S.settings.richMenu.builtFor ? `อัปเดตแล้ว ${thDate(S.settings.richMenu.builtFor, true)}` : 'รอสร้าง') : 'ปิดอยู่', link: '#line' },
       { ok: S.storage === 'postgres', t: 'การบันทึกข้อมูล', d: S.storage === 'postgres' ? 'ถาวร (ฐานข้อมูล) ข้อมูลไม่หายเมื่ออัปเดต' : 'ชั่วคราว ข้อมูลจะหายเมื่อรีสตาร์ต ให้ส่งออกสำรองไว้', link: '#settings' },
     ];
     $('#status-list').innerHTML = status.map((s) => `<div class="status"><i class="dot ${s.ok ? 'ok' : 'warn'}"></i><div><b>${s.t}</b><span>${esc(s.d)}</span></div><a href="${s.link}">จัดการ ›</a></div>`).join('');
 
-    $('#history').innerHTML = S.history.length ? S.history.map((h) => `<div class="h-item"><span class="ic">${h.ok ? '✅' : '⚠️'}</span><div><b>${esc(h.subject)}</b> ${h.room ? `· ${esc(h.room)}` : ''}<small>${new Date(h.at).toLocaleString('th-TH', { timeZone: S.settings.timezone, dateStyle: 'medium', timeStyle: 'short' })} · ก่อน ${h.minutesBefore} นาที · ${esc(h.detail || '')}</small></div></div>`).join('')
+    $('#history').innerHTML = S.history.length ? S.history.map((h) => `<div class="h-item"><span class="ic">${h.ok ? '✅' : '⚠️'}</span><div><b>${esc(h.subject)}</b> ${h.room ? `· ${esc(h.room)}` : ''}<small>${new Date(h.at).toLocaleString('th-TH', { timeZone: S.settings.timezone, dateStyle: 'medium', timeStyle: 'short' })}${h.group ? ` · ${esc(h.group)}` : ''}${h.minutesBefore != null ? ` · ก่อน ${h.minutesBefore} นาที` : ''} · ${esc(h.detail || '')}</small></div></div>`).join('')
       : '<div class="empty"><span class="big">🔔</span>ยังไม่มีการแจ้งเตือน</div>';
   }
 
@@ -124,10 +160,13 @@
     const card = $('#now-card');
     const nowSec = n.min * 60 + n.sec;
     // หาคาบปัจจุบัน หรือคาบถัดไปภายใน 7 วัน
-    let current = classesOn(n.weekday).find((c) => n.min >= toMin(c.start) && n.min < toMin(c.end));
+    const spNow = S.todayKey && specialOn(S.todayKey);
+    let current = spNow && spNow.suspendClasses !== false ? null : classesOn(n.weekday).find((c) => n.min >= toMin(c.start) && n.min < toMin(c.end));
     let next = null, nextIn = 0;
-    for (let off = 0; off < 7 && !next; off++) {
+    for (let off = 0; off < 60 && !next; off++) {
       const d = (n.weekday + off) % 7;
+      const sp = S.todayKey && specialOn(shiftKey(S.todayKey, off));
+      if (sp && sp.suspendClasses !== false) continue; // ข้ามวันหยุดทั้งโรงเรียน
       const c = classesOn(d).find((x) => off > 0 || toMin(x.start) * 60 > nowSec);
       if (c) { next = c; nextIn = off * 86400 + toMin(c.start) * 60 - nowSec; }
     }
@@ -165,12 +204,18 @@
     $$('#tt-view button').forEach((b) => b.classList.toggle('active', b.dataset.view === view));
     $('#timetable-wrap').classList.toggle('hidden', view !== 'week');
     $('#class-list').classList.toggle('hidden', view !== 'list');
+    if (ttGroup && !groupOf(ttGroup)) ttGroup = '';
+    $('#tt-group').innerHTML = groupOptions(ttGroup, { all: S.groups.length ? 'ทุกชั้นเรียน' : 'ยังไม่มีชั้นเรียน' });
+    $('#tt-group').classList.toggle('hidden', !S.groups.length);
     const n = nowLocal();
+    // วันที่ของสัปดาห์นี้ (เริ่มวันจันทร์) เพื่อแสดงวันหยุด
+    const monday = shiftKey(S.todayKey, -((n.weekday + 6) % 7));
+    const dateOfDay = (d) => shiftKey(monday, (d + 6) % 7);
     const days = [...S.settings.visibleDays].sort((a, b) => ((a + 6) % 7) - ((b + 6) % 7)); // เริ่มวันจันทร์
     // ขยายช่วงเวลาอัตโนมัติถ้ามีคาบอยู่นอกช่วงที่ตั้งไว้
     let startH = Math.floor(toMin(S.settings.dayStart) / 60);
     let endH = Math.ceil(toMin(S.settings.dayEnd) / 60);
-    for (const c of S.classes) if (days.includes(c.day)) { startH = Math.min(startH, Math.floor(toMin(c.start) / 60)); endH = Math.max(endH, Math.ceil(toMin(c.end) / 60)); }
+    for (const c of S.classes.filter((x) => !ttGroup || !x.groupId || x.groupId === ttGroup)) if (days.includes(c.day)) { startH = Math.min(startH, Math.floor(toMin(c.start) / 60)); endH = Math.max(endH, Math.ceil(toMin(c.end) / 60)); }
     const hourPx = 64;
     const height = (endH - startH) * hourPx;
     const top = (t) => ((toMin(t) - startH * 60) / 60) * hourPx;
@@ -178,29 +223,35 @@
     const tt = $('#timetable');
     tt.style.setProperty('--cols', days.length || 1);
     let html = '<div class="tt-corner"></div>';
-    html += days.map((d) => `<div class="tt-day ${d === n.weekday ? 'today' : ''}"><b>${DAYS[d]}</b><span>${classesOn(d).length} คาบ</span></div>`).join('');
+    html += days.map((d) => {
+      const sp = specialOn(dateOfDay(d));
+      const t = sp && (SP_TYPES[sp.type] || SP_TYPES.holiday);
+      return `<div class="tt-day ${d === n.weekday ? 'today' : ''}"><b>${DAYS[d]}</b><small>${thDate(dateOfDay(d), true)}</small><span>${ttClassesOn(d).length} คาบ</span>${sp ? `<br><span class="off" style="--sc:${t.color}" title="${esc(sp.name)}">${t.icon} ${esc(sp.name)}</span>` : ''}</div>`;
+    }).join('');
     html += `<div class="tt-times" style="height:${height}px">${Array.from({ length: endH - startH }, (_, i) => `<div>${String(startH + i).padStart(2, '0')}:00</div>`).join('')}</div>`;
     html += days.map((d) => {
-      const blocks = classesOn(d).map((c) => {
+      const sp = specialOn(dateOfDay(d));
+      const off = sp && sp.suspendClasses !== false;
+      const blocks = ttClassesOn(d).map((c) => {
         const room = roomOf(c.roomId);
         const h = Math.max(top(c.end) - top(c.start), 26);
         return `<div class="tt-block" style="--c:${c.color};top:${top(c.start)}px;height:${h - 3}px" data-edit-class="${c.id}" title="${esc(c.subject)}">
           ${c.reminderEnabled ? `<span class="bell">🔔${reminderOf(c)}′</span>` : ''}
-          <b>${esc(c.subject)}</b>${h > 44 ? `<span>${c.start}–${c.end}</span>` : ''}${h > 62 ? `<span>📍 ${esc(room?.name || '-')}</span>` : ''}${h > 80 && c.teacher ? `<span>${esc(c.teacher)}</span>` : ''}
+          <b>${esc(c.subject)}</b>${h > 44 ? `<span>${c.start}–${c.end}${!ttGroup && c.groupId && groupOf(c.groupId) ? ` · ${esc(groupOf(c.groupId).name)}` : ''}</span>` : ''}${h > 62 ? `<span>📍 ${esc(room?.name || '-')}</span>` : ''}${h > 80 && c.teacher ? `<span>${esc(c.teacher)}</span>` : ''}
         </div>`;
       }).join('');
       const nowLine = d === n.weekday && n.min >= startH * 60 && n.min <= endH * 60 ? `<div class="tt-now" style="top:${((n.min - startH * 60) / 60) * hourPx}px"></div>` : '';
-      return `<div class="tt-col ${d === n.weekday ? 'today' : ''}" data-day="${d}" data-start-h="${startH}" style="height:${height}px">${blocks}${nowLine}</div>`;
+      return `<div class="tt-col ${d === n.weekday ? 'today' : ''} ${off ? 'off' : ''}" style="height:${height}px;${off ? `--sc:${(SP_TYPES[sp.type] || SP_TYPES.holiday).color}` : ''}" data-day="${d}" data-start-h="${startH}">${blocks}${nowLine}</div>`;
     }).join('');
     tt.innerHTML = html;
 
     // มุมมองรายการ
     const allDays = [1, 2, 3, 4, 5, 6, 0];
-    $('#class-list').innerHTML = allDays.filter((d) => classesOn(d).length).map((d) => `<div><h3 style="--dc:${DAY_COLORS[d]}"><i></i>วัน${DAYS[d]}</h3><div class="timeline">${classesOn(d).map((c) => {
+    $('#class-list').innerHTML = allDays.filter((d) => ttClassesOn(d).length).map((d) => `<div><h3 style="--dc:${DAY_COLORS[d]}"><i></i>วัน${DAYS[d]}</h3><div class="timeline">${ttClassesOn(d).map((c) => {
       const room = roomOf(c.roomId);
       const url = navUrl(room);
       return `<div class="tl-item" style="--c:${c.color}" data-edit-class="${c.id}"><div class="tl-time"><b>${c.start}</b><span>${c.end}</span></div>
-        <div><div class="tl-sub">${esc(c.subject)} ${c.code ? `<span class="muted small">${esc(c.code)}</span>` : ''}</div><div class="tl-room">📍 ${esc(room?.name || '-')} · 🔔 ${c.reminderEnabled ? `${reminderOf(c)} นาที` : 'ปิด'}</div></div>
+        <div><div class="tl-sub">${esc(c.subject)} ${c.code ? `<span class="muted small">${esc(c.code)}</span>` : ''} ${!ttGroup ? gchip(c) : ''}</div><div class="tl-room">📍 ${esc(room?.name || '-')} · 🔔 ${c.reminderEnabled ? `${reminderOf(c)} นาที` : 'ปิด'}</div></div>
         ${url ? `<a class="nav-pill" href="${esc(url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">🧭</a>` : '<span></span>'}</div>`;
     }).join('')}</div></div>`).join('') || '<div class="card empty"><span class="big">🗓️</span>ยังไม่มีคาบเรียน</div>';
   }
@@ -301,12 +352,14 @@
   function openClass(id, preset = {}) {
     editingClass = id ? S.classes.find((c) => c.id === id) : null;
     const n = nowLocal();
-    const c = editingClass || { subject: '', code: '', teacher: '', note: '', roomId: S.rooms[0]?.id || '', day: S.settings.visibleDays.includes(n.weekday) ? n.weekday : S.settings.visibleDays[0] ?? 1, start: '08:30', end: '09:20', color: PALETTE[(S.classes.length + 1) % PALETTE.length], reminderEnabled: true, reminderMinutes: null, ...preset };
+    const c = editingClass || { subject: '', code: '', teacher: '', note: '', groupId: ttGroup || null, roomId: S.rooms[0]?.id || '', day: S.settings.visibleDays.includes(n.weekday) ? n.weekday : S.settings.visibleDays[0] ?? 1, start: '08:30', end: '09:20', color: PALETTE[(S.classes.length + 1) % PALETTE.length], reminderEnabled: true, reminderMinutes: null, ...preset };
     const f = $('#class-form');
     $('#class-dialog-title').textContent = editingClass ? 'แก้ไขคาบเรียน' : 'เพิ่มคาบเรียน';
     for (const k of ['subject', 'code', 'teacher', 'note', 'start', 'end']) f[k].value = c[k] || '';
     $('#class-room').innerHTML = `<option value="">— ไม่ระบุห้อง —</option>` + S.rooms.map((r) => `<option value="${r.id}">${esc(r.name)}${r.building ? ` (${esc(r.building)})` : ''}</option>`).join('');
     f.roomId.value = c.roomId || '';
+    $('#class-group').innerHTML = groupOptions(c.groupId || '', { none: S.groups.length ? '— ใช้ร่วมทุกชั้นเรียน —' : '— ยังไม่มีชั้นเรียน —' });
+    $('#class-group').closest('label').classList.toggle('hidden', !S.groups.length && !c.groupId);
     f.reminderEnabled.checked = c.reminderEnabled !== false;
     f.reminderMinutes.value = c.reminderMinutes ?? '';
     dayPicker($('#class-day'), [c.day], true, updateClassPreview);
@@ -319,7 +372,7 @@
     const f = $('#class-form');
     return {
       subject: f.subject.value.trim() || 'ชื่อวิชา', code: f.code.value, teacher: f.teacher.value, note: f.note.value,
-      start: f.start.value, end: f.end.value, roomId: f.roomId.value || null,
+      start: f.start.value, end: f.end.value, roomId: f.roomId.value || null, groupId: f.groupId.value || null,
       day: selectedDays($('#class-day'))[0] ?? 1, color: selectedSwatch($('#class-colors')),
       reminderEnabled: f.reminderEnabled.checked, reminderMinutes: f.reminderMinutes.value === '' ? null : Number(f.reminderMinutes.value),
     };
@@ -362,6 +415,7 @@
     $('#recipients').innerHTML = S.recipients.length ? S.recipients.map((r) => `<div class="rcp">
         <div class="rcp-av">${r.type === 'user' ? '👤' : '👥'}</div>
         <div class="grow"><div class="rcp-name">${esc(r.name || 'ไม่ทราบชื่อ')} ${r.left ? '<span class="muted small">(ออกแล้ว)</span>' : ''}</div><div class="rcp-id">${esc(r.id)}</div></div>
+        ${S.groups.length ? `<select data-rcp-group="${esc(r.id)}" title="ชั้นเรียน">${groupOptions(r.groupId || '', { none: '— ยังไม่ระบุห้อง —' })}</select>` : ''}
         <input type="checkbox" class="switch" data-rcp-toggle="${esc(r.id)}" ${r.enabled ? 'checked' : ''} title="เปิด/ปิดการส่ง" />
         <button type="button" class="icon-btn" data-rcp-del="${esc(r.id)}" title="ลบ">🗑</button>
       </div>`).join('')
@@ -474,6 +528,13 @@
     const t = e.target;
     if (t.closest('[data-action=new-class]')) return S.rooms.length || confirm('ยังไม่มีห้องเรียน ต้องการเพิ่มคาบโดยไม่ระบุห้องหรือไม่?') ? openClass() : (location.hash = '#rooms');
     if (t.closest('[data-action=new-room]')) return openRoom();
+    if (t.closest('[data-action=new-group]')) return openGroup();
+    if (t.closest('[data-action=new-special]')) return openSpecial();
+    const eg = t.closest('[data-edit-group]'); if (eg && !t.closest('[data-goto-group]')) return openGroup(eg.dataset.editGroup);
+    const gg = t.closest('[data-goto-group]');
+    if (gg) { ttGroup = gg.dataset.gotoGroup; localStorage.setItem('tt-group', ttGroup); renderTimetable(); location.hash = '#timetable'; return; }
+    const es = t.closest('[data-edit-special]'); if (es) return openSpecial(es.dataset.editSpecial);
+    const nd = t.closest('[data-new-special-date]'); if (nd) return openSpecial(null, nd.dataset.newSpecialDate);
     if (t.closest('[data-action=vision]')) return openVision();
     const ec = t.closest('[data-edit-class]'); if (ec) return openClass(ec.dataset.editClass);
     const er = t.closest('[data-edit-room]'); if (er) return openRoom(er.dataset.editRoom);
@@ -496,6 +557,7 @@
     }
   });
 
+  $('#tt-group').onchange = (e) => { ttGroup = e.target.value; localStorage.setItem('tt-group', ttGroup); renderTimetable(); };
   $('#tt-view').onclick = (e) => { const b = e.target.closest('button'); if (!b) return; view = b.dataset.view; localStorage.setItem('tt-view', view); renderTimetable(); };
 
   // Class form
@@ -583,6 +645,10 @@
   });
   $('#line-mode-form').addEventListener('change', async (e) => {
     const t = e.target;
+    if (t.dataset.rcpGroup) {
+      await setRecipientGroup(t.dataset.rcpGroup, t.value);
+      return;
+    }
     if (t.dataset.rcpToggle) {
       await api(`/api/recipients/${encodeURIComponent(t.dataset.rcpToggle)}`, { method: 'PUT', body: { enabled: t.checked } }).catch((er) => toast(er.message, 'err'));
       return refresh();
@@ -718,6 +784,7 @@
   }
   function openVision() {
     vsBlob = null; vsEntries = [];
+    $('#vs-group').innerHTML = groupOptions(ttGroup, { none: S.groups.length ? '— ใช้ร่วมทุกชั้นเรียน —' : '— ยังไม่มีชั้นเรียน —' });
     $('#vs-file').value = '';
     $('#vs-preview').classList.add('hidden');
     $('#vs-empty').classList.remove('hidden');
@@ -764,6 +831,7 @@
       const fd = new FormData();
       fd.append('image', vsBlob, 'timetable.jpg');
       fd.append('hint', $('#vs-hint').value);
+      fd.append('groupId', $('#vs-group').value);
       fd.append('auto', $('#vs-auto').checked ? '1' : '0');
       const r = await api('/api/vision/analyze', { method: 'POST', body: fd });
       vsEntries = r.entries;
@@ -886,6 +954,277 @@
     renderAi();
   };
 
+  // ---------------- ชั้นเรียน (ม./ห้อง) ----------------
+  function renderGroups() {
+    const active = S.recipients.filter((r) => !r.left);
+    $('#group-grid').innerHTML = S.groups.length ? S.groups.map((g) => {
+      const cls = S.classes.filter((c) => c.groupId === g.id).length;
+      const users = active.filter((r) => r.groupId === g.id && r.type === 'user').length;
+      const chats = active.filter((r) => r.groupId === g.id && r.type !== 'user').length;
+      return `<div class="group-card" data-edit-group="${g.id}">
+        <h3>${esc(g.name)}</h3>
+        ${g.note ? `<div class="muted small">${esc(g.note)}</div>` : ''}
+        <div class="stats"><span>📚 ${cls} คาบ</span><span class="${users + chats ? '' : 'warn'}">👤 ${users} คน${chats ? ` · 👥 ${chats} กลุ่ม` : ''}</span></div>
+        <div class="acts"><button class="btn" data-goto-group="${g.id}">🗓️ ตารางสอน</button></div>
+      </div>`;
+    }).join('') : '<div class="card empty" style="grid-column:1/-1"><span class="big">🎓</span>ยังไม่มีชั้นเรียน กด “สร้างหลายห้อง” เพื่อสร้าง ม.1–ม.6 ได้ในครั้งเดียว</div>';
+    renderAssign();
+  }
+  function renderAssign() {
+    const q = $('#assign-search').value.trim().toLowerCase();
+    const f = $('#assign-filter').value;
+    const sel = $('#assign-filter');
+    const keep = sel.value;
+    sel.innerHTML = '<option value="">ทั้งหมด</option><option value="__none">ยังไม่ระบุห้อง</option>' + S.groups.map((g) => `<option value="${g.id}">${esc(g.name)}</option>`).join('');
+    sel.value = [...sel.options].some((o) => o.value === keep) ? keep : '';
+    const list = S.recipients.filter((r) => !r.left)
+      .filter((r) => !q || (r.name || '').toLowerCase().includes(q))
+      .filter((r) => !f || (f === '__none' ? !r.groupId : r.groupId === f));
+    const none = S.recipients.filter((r) => !r.left && !r.groupId).length;
+    $('#unassigned-count').textContent = none ? `ยังไม่ระบุห้อง ${none}` : 'ระบุห้องครบแล้ว';
+    $('#assign-list').innerHTML = !S.groups.length ? '<div class="empty small">สร้างชั้นเรียนก่อน แล้วจึงผูกบัญชี LINE</div>'
+      : list.length ? list.map((r) => `<div class="rcp">
+        <div class="rcp-av">${r.type === 'user' ? '👤' : '👥'}</div>
+        <div class="grow"><div class="rcp-name">${esc(r.name || 'ไม่ทราบชื่อ')}</div><div class="rcp-id">${r.type === 'user' ? 'ผู้ใช้ LINE' : 'กลุ่ม LINE'} · ${esc(r.id.slice(0, 10))}…</div></div>
+        <select data-assign="${esc(r.id)}">${groupOptions(r.groupId || '', { none: '— ยังไม่ระบุห้อง —' })}</select>
+      </div>`).join('') : '<div class="empty small">ไม่พบบัญชีที่ตรงเงื่อนไข</div>';
+  }
+  async function setRecipientGroup(id, groupId) {
+    try {
+      await api(`/api/recipients/${encodeURIComponent(id)}`, { method: 'PUT', body: { groupId: groupId || null } });
+      const r = S.recipients.find((x) => x.id === id);
+      if (r) r.groupId = groupId || null;
+      toast(groupId ? `ผูกกับ ${groupOf(groupId)?.name} แล้ว${S.settings.richMenu?.enabled ? ' · เปลี่ยนริชเมนูให้แล้ว' : ''}` : 'ยกเลิกการผูกห้องแล้ว', 'ok');
+      renderGroups(); renderLine(); renderDashboard();
+    } catch (e) { toast(e.message, 'err'); }
+  }
+  $('#assign-list').addEventListener('change', (e) => { if (e.target.dataset.assign) setRecipientGroup(e.target.dataset.assign, e.target.value); });
+  $('#assign-search').addEventListener('input', renderAssign);
+  $('#assign-filter').addEventListener('change', renderAssign);
+
+  let editingGroup = null;
+  function openGroup(id) {
+    editingGroup = id ? groupOf(id) : null;
+    const f = $('#group-form');
+    $('#group-dialog-title').textContent = editingGroup ? `แก้ไข ${editingGroup.name}` : 'เพิ่มชั้นเรียน';
+    f.name.value = editingGroup?.name || '';
+    f.note.value = editingGroup?.note || '';
+    $('#group-delete').classList.toggle('hidden', !editingGroup);
+    $('#group-dialog').showModal();
+  }
+  $('#group-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = e.target;
+    await busy(e.submitter, async () => {
+      const body = { name: f.name.value, note: f.note.value };
+      if (editingGroup) await api(`/api/groups/${editingGroup.id}`, { method: 'PUT', body });
+      else await api('/api/groups', { method: 'POST', body });
+      $('#group-dialog').close();
+      toast('บันทึกชั้นเรียนแล้ว', 'ok');
+      await refresh();
+    });
+  });
+  $('#group-delete').onclick = async () => {
+    if (!editingGroup) return;
+    const n = S.classes.filter((c) => c.groupId === editingGroup.id).length;
+    if (!confirm(`ลบ ${editingGroup.name}?${n ? `\nคาบเรียน ${n} คาบของห้องนี้จะกลายเป็น “ใช้ร่วมทุกชั้นเรียน”` : ''}`)) return;
+    await busy($('#group-delete'), async () => { await api(`/api/groups/${editingGroup.id}`, { method: 'DELETE' }); $('#group-dialog').close(); toast('ลบแล้ว'); await refresh(); });
+  };
+  function bulkNames() {
+    const f = $('#bulk-form');
+    const from = Math.max(1, +f.from.value || 1), to = Math.min(12, Math.max(from, +f.to.value || from)), rooms = Math.min(30, Math.max(1, +f.rooms.value || 1));
+    const out = [];
+    for (let lv = from; lv <= to; lv++) for (let r = 1; r <= rooms; r++) out.push(`${f.prefix.value}${lv}/${r}`);
+    return out;
+  }
+  function renderBulk() {
+    const names = new Set(S.groups.map((g) => g.name));
+    $('#bulk-preview').innerHTML = bulkNames().map((n) => `<span class="${names.has(n) ? 'exists' : ''}">${esc(n)}</span>`).join('');
+  }
+  $('#group-bulk-btn').onclick = () => { renderBulk(); $('#bulk-dialog').showModal(); };
+  $('#bulk-form').addEventListener('input', renderBulk);
+  $('#bulk-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    await busy(e.submitter, async () => {
+      const r = await api('/api/groups/bulk', { method: 'POST', body: { names: bulkNames() } });
+      $('#bulk-dialog').close();
+      toast(`สร้างชั้นเรียนใหม่ ${r.added} ห้อง`, 'ok');
+      await refresh();
+    });
+  });
+
+  // ---------------- วันพิเศษ ----------------
+  let calMonth = null; // 'YYYY-MM'
+  function renderCalendar() {
+    if (!calMonth) calMonth = S.todayKey.slice(0, 7);
+    const [y, m] = calMonth.split('-').map(Number);
+    $('#cal-title').textContent = `${TH_MONTHS[m - 1]} ${y + 543}`;
+    const first = `${calMonth}-01`;
+    const startKey = shiftKey(first, -((kd(first).getUTCDay() + 6) % 7));
+    let html = ['จ', 'อ', 'พ', 'พฤ', 'ศ', 'ส', 'อา'].map((d) => `<div class="dow">${d}</div>`).join('');
+    for (let i = 0; i < 42; i++) {
+      const key = shiftKey(startKey, i);
+      if (i >= 35 && key.slice(0, 7) !== calMonth) break;
+      const sp = specialOn(key);
+      const t = sp && (SP_TYPES[sp.type] || SP_TYPES.holiday);
+      const cls = ['cell', key.slice(0, 7) !== calMonth ? 'out' : '', key === S.todayKey ? 'today' : '', sp ? 'sp' : '', sp && sp.start === key ? (sp.end === key ? 'one' : 'start') : ''].join(' ');
+      html += `<div class="${cls}" ${sp ? `style="--sc:${t.color}" data-edit-special="${sp.id}" title="${esc(sp.name)}"` : `data-new-special-date="${key}" title="เพิ่มวันพิเศษ"`}>${kd(key).getUTCDate()}${sp && (sp.start === key || kd(key).getUTCDay() === 1) ? `<small>${esc(sp.name)}</small>` : ''}</div>`;
+    }
+    $('#month').innerHTML = html;
+    $('#legend').innerHTML = Object.values(SP_TYPES).map((t) => `<span><i style="--sc:${t.color}"></i>${t.label}</span>`).join('') + '<span>แตะวันที่เพื่อเพิ่มวันพิเศษ</span>';
+
+    const sorted = [...S.specialDays].sort((a, b) => a.start.localeCompare(b.start));
+    const item = (sp) => {
+      const t = SP_TYPES[sp.type] || SP_TYPES.holiday;
+      const d = kd(sp.start), days = daysBetween(sp.start, sp.end) + 1;
+      const now = sp.start <= S.todayKey && S.todayKey <= sp.end;
+      return `<div class="sp-item ${sp.end < S.todayKey ? 'past' : ''}" style="--sc:${t.color}" data-edit-special="${sp.id}">
+        <div class="when"><b>${d.getUTCDate()}</b><span>${TH_MON[d.getUTCMonth()]}</span></div>
+        <div class="grow"><div class="t">${t.icon} ${t.label}${now ? ' · ● ตอนนี้' : ''}${sp.suspendClasses === false ? ' · เรียนตามปกติ' : ''}</div><div class="n">${esc(sp.name)}</div><div class="r">${thRange(sp.start, sp.end)}${days > 1 ? ` · ${days} วัน` : ''}</div></div>
+      </div>`;
+    };
+    const cur = sorted.filter((x) => x.end >= S.todayKey), past = sorted.filter((x) => x.end < S.todayKey).reverse().slice(0, 10);
+    $('#special-list').innerHTML = (cur.length ? '<h4>กำลังดำเนินอยู่และที่จะมาถึง</h4>' + cur.map(item).join('') : '<div class="empty"><span class="big">📆</span>ยังไม่มีวันหยุดหรือกิจกรรมที่จะมาถึง</div>')
+      + (past.length ? '<h4>ผ่านไปแล้ว</h4>' + past.map(item).join('') : '');
+
+    const f = $('#announce-form');
+    f.announceEnabled.checked = S.settings.announceEnabled !== false;
+    f.announceTime.value = S.settings.announceTime || '08:00';
+    f.announceEve.checked = !!S.settings.announceEve;
+  }
+  $('#cal-prev').onclick = () => { const d = kd(`${calMonth}-01`); d.setUTCMonth(d.getUTCMonth() - 1); calMonth = keyOf(d).slice(0, 7); renderCalendar(); };
+  $('#cal-next').onclick = () => { const d = kd(`${calMonth}-01`); d.setUTCMonth(d.getUTCMonth() + 1); calMonth = keyOf(d).slice(0, 7); renderCalendar(); };
+  async function renderAnnouncePreview() {
+    const sp = S.specialDays.filter((x) => x.end >= S.todayKey).sort((a, b) => a.start.localeCompare(b.start))[0]
+      || { name: 'วันหยุดตัวอย่าง', type: 'holiday', start: shiftKey(S.todayKey, 7), end: shiftKey(S.todayKey, 7), suspendClasses: true, note: '' };
+    try { $('#announce-preview').innerHTML = renderFlex(await api('/api/announce/preview', { method: 'POST', body: { special: sp } })); } catch { /* ignore */ }
+  }
+  $('#announce-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = e.target;
+    await busy(e.submitter, async () => {
+      S.settings = await api('/api/settings', { method: 'PUT', body: { announceEnabled: f.announceEnabled.checked, announceTime: f.announceTime.value, announceEve: f.announceEve.checked } });
+      toast('บันทึกการประกาศวันหยุดแล้ว', 'ok');
+    });
+  });
+
+  let editingSpecial = null, spType = 'holiday';
+  function openSpecial(id, date) {
+    editingSpecial = id ? S.specialDays.find((x) => x.id === id) : null;
+    const sp = editingSpecial || { name: '', type: 'holiday', start: date || shiftKey(S.todayKey, 1), end: date || shiftKey(S.todayKey, 1), suspendClasses: true, note: '' };
+    const f = $('#special-form');
+    $('#special-dialog-title').textContent = editingSpecial ? 'แก้ไขวันพิเศษ' : 'เพิ่มวันพิเศษ';
+    f.name.value = sp.name; f.start.value = sp.start; f.end.value = sp.end; f.note.value = sp.note || '';
+    f.suspendClasses.checked = sp.suspendClasses !== false;
+    setSpType(sp.type);
+    $('#special-delete').classList.toggle('hidden', !editingSpecial);
+    $('#special-test').classList.toggle('hidden', !editingSpecial);
+    $('#special-dialog').showModal();
+    updateSpecialPreview();
+  }
+  function setSpType(type) {
+    spType = type;
+    const t = SP_TYPES[type];
+    $$('#special-type button').forEach((b) => { b.classList.toggle('active', b.dataset.type === type); b.style.setProperty('--sc', SP_TYPES[b.dataset.type].color); });
+    $('#special-head').style.setProperty('--dc', t.color);
+    // วันหยุดและปิดภาคเรียนงดเรียนเสมอ ส่วนวันกิจกรรมเลือกได้
+    $('#suspend-row').classList.toggle('hidden', type !== 'activity');
+    if (type !== 'activity') $('#special-form').suspendClasses.checked = true;
+  }
+  function specialFromForm() {
+    const f = $('#special-form');
+    return { name: f.name.value.trim() || 'วันพิเศษ', type: spType, start: f.start.value, end: f.end.value || f.start.value, suspendClasses: f.suspendClasses.checked, note: f.note.value };
+  }
+  let spTimer = null;
+  function updateSpecialPreview() {
+    const sp = specialFromForm();
+    const ok = sp.start && sp.end && sp.end >= sp.start;
+    $('#special-span').textContent = ok ? `${daysBetween(sp.start, sp.end) + 1} วัน · ${thRange(sp.start, sp.end)}` : 'วันสิ้นสุดต้องไม่ก่อนวันเริ่ม';
+    clearTimeout(spTimer);
+    if (!ok) return;
+    spTimer = setTimeout(async () => {
+      try { $('#special-preview').innerHTML = renderFlex(await api('/api/announce/preview', { method: 'POST', body: { special: sp } })); } catch { /* ignore */ }
+    }, 200);
+  }
+  $('#special-type').onclick = (e) => { const b = e.target.closest('button'); if (b) { setSpType(b.dataset.type); updateSpecialPreview(); } };
+  $('#special-form').addEventListener('input', (e) => {
+    const f = $('#special-form');
+    if (e.target.name === 'start' && (!f.end.value || f.end.value < f.start.value)) f.end.value = f.start.value;
+    updateSpecialPreview();
+  });
+  $('#special-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    await busy(e.submitter, async () => {
+      const body = specialFromForm();
+      body.name = $('#special-form').name.value.trim();
+      if (editingSpecial) await api(`/api/specialDays/${editingSpecial.id}`, { method: 'PUT', body });
+      else await api('/api/specialDays', { method: 'POST', body });
+      $('#special-dialog').close();
+      calMonth = body.start.slice(0, 7);
+      toast('บันทึกวันพิเศษแล้ว · ระบบจะอัปเดตริชเมนูให้', 'ok');
+      await refresh();
+    });
+  });
+  $('#special-delete').onclick = async () => {
+    if (!editingSpecial || !confirm(`ลบ “${editingSpecial.name}”?`)) return;
+    await busy($('#special-delete'), async () => { await api(`/api/specialDays/${editingSpecial.id}`, { method: 'DELETE' }); $('#special-dialog').close(); toast('ลบแล้ว'); await refresh(); });
+  };
+  $('#special-test').onclick = () => busy($('#special-test'), async () => {
+    if (!confirm('ส่งประกาศทดสอบถึงทั้งโรงเรียนตอนนี้?')) return;
+    const r = await api('/api/announce/test', { method: 'POST', body: { id: editingSpecial.id } });
+    toast(`ส่งประกาศแล้ว (${r.detail}) 📨`, 'ok');
+  });
+
+  // ---------------- ริชเมนูรายวัน ----------------
+  function renderRichMenu() {
+    const rm = S.settings.richMenu || {};
+    $('#rm-enabled').checked = !!rm.enabled;
+    $('#rm-selected').checked = rm.selected !== false;
+    const b = $('#rm-badge');
+    b.textContent = !rm.enabled ? 'ปิดอยู่' : rm.lastError ? '⚠ ผิดพลาด' : rm.builtFor === S.todayKey ? '● ใช้งานอยู่' : 'รอสร้าง';
+    b.classList.toggle('ok', !!rm.enabled && !rm.lastError && rm.builtFor === S.todayKey);
+    const keep = $('#rm-group').value;
+    $('#rm-group').innerHTML = `<option value="">เมนูค่าเริ่มต้น (ยังไม่ระบุห้อง)</option>` + S.groups.map((g) => `<option value="${g.id}">${esc(g.name)}</option>`).join('');
+    $('#rm-group').value = [...$('#rm-group').options].some((o) => o.value === keep) ? keep : (ttGroup || '');
+    if (!$('#rm-date').value) $('#rm-date').value = S.todayKey;
+    $('#rm-status').innerHTML = !rm.enabled ? '<span class="muted">เปิดใช้งานเพื่อให้ระบบสร้างริชเมนูอัตโนมัติทุกวัน</span>'
+      : rm.lastError ? `⚠️ <b>สร้างไม่สำเร็จ:</b> ${esc(rm.lastError)} <span class="muted">(ระบบจะลองใหม่อัตโนมัติ)</span>`
+      : rm.builtAt ? `✅ อัปเดตล่าสุด ${new Date(rm.builtAt).toLocaleString('th-TH', { timeZone: S.settings.timezone, dateStyle: 'medium', timeStyle: 'short' })} · ${Object.keys(rm.menus || {}).length} เมนู · ผูกผู้ใช้ ${rm.linked || 0} คน`
+      : 'กำลังรอสร้างเมนูแรก…';
+  }
+  let rmUrl = null, rmSeq = 0;
+  async function loadRichMenuPreview() {
+    const seq = ++rmSeq;
+    $('#rm-loading').classList.remove('hidden');
+    try {
+      const qs = new URLSearchParams({ group: $('#rm-group').value, date: $('#rm-date').value || S.todayKey });
+      const res = await fetch(`/api/richmenu/preview.png?${qs}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+      if (!res.ok) throw new Error('สร้างตัวอย่างไม่ได้');
+      const blob = await res.blob();
+      if (seq !== rmSeq) return;
+      if (rmUrl) URL.revokeObjectURL(rmUrl);
+      rmUrl = URL.createObjectURL(blob);
+      $('#rm-img').src = rmUrl;
+    } catch (e) { toast(e.message, 'err'); } finally { if (seq === rmSeq) $('#rm-loading').classList.add('hidden'); }
+  }
+  $('#rm-group').onchange = loadRichMenuPreview;
+  $('#rm-date').onchange = loadRichMenuPreview;
+  $('#rm-tomorrow').onclick = () => { $('#rm-date').value = shiftKey(S.todayKey, 1); loadRichMenuPreview(); };
+  async function saveRichMenu(body, msg) {
+    try {
+      S.settings = await api('/api/richmenu', { method: 'PUT', body });
+      renderRichMenu(); renderDashboard();
+      if (msg) toast(msg, 'ok');
+    } catch (e) { toast(e.message, 'err'); renderRichMenu(); }
+  }
+  $('#rm-enabled').onchange = (e) => saveRichMenu({ enabled: e.target.checked }, e.target.checked ? 'เปิดริชเมนูรายวันแล้ว · ระบบกำลังสร้างเมนู' : 'ปิดและลบริชเมนูแล้ว');
+  $('#rm-selected').onchange = (e) => saveRichMenu({ selected: e.target.checked }, 'บันทึกแล้ว (มีผลกับเมนูรอบถัดไป)');
+  $('#rm-rebuild').onclick = () => busy($('#rm-rebuild'), async () => {
+    const r = await api('/api/richmenu/rebuild', { method: 'POST' });
+    toast(`อัปเดตริชเมนู ${r.menus} ชุดแล้ว · ผูกผู้ใช้ ${r.linked} คน ✨`, 'ok');
+    await refresh();
+  });
+
   // ---------------- Login / boot ----------------
   function showLogin() { $('#login').classList.remove('hidden'); }
   $('#login-form').addEventListener('submit', async (e) => {
@@ -901,7 +1240,7 @@
   async function refresh(background = false) {
     S = await api('/api/state');
     // รีเฟรชเบื้องหลัง: ไม่แตะฟอร์มตั้งค่าที่ผู้ใช้อาจกำลังแก้อยู่
-    if (background) { renderDashboard(); renderTimetable(); return; }
+    if (background) { renderDashboard(); renderTimetable(); renderRichMenu(); return; }
     renderAll();
     if ($('#page-line').classList.contains('active')) renderPreview();
   }

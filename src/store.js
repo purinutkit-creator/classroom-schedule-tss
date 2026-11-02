@@ -33,8 +33,16 @@ const DEFAULT_DB = () => ({
       replyKeywords: true,
     },
     ai: { apiKey: '' },
+    // แจ้งวันหยุดทั้งโรงเรียน เวลา 08:00 ทุกวันในช่วงวันหยุด
+    announceEnabled: true,
+    announceTime: '08:00',
+    announceEve: false,
+    // ริชเมนูรายวัน (สร้างใหม่ทุกเที่ยงคืน แยกตามชั้น/ห้อง)
+    richMenu: { enabled: false, selected: true, menus: {}, builtFor: null, builtAt: null, lastError: null, failedAt: null, dirtyAt: null, linked: 0 },
   },
   rooms: [],
+  groups: [],
+  specialDays: [],
   classes: [],
   recipients: [],
   fonts: [],
@@ -54,6 +62,7 @@ function normalize(raw) {
       font: { ...base.settings.font, ...((raw.settings || {}).font || {}) },
       line: { ...base.settings.line, ...((raw.settings || {}).line || {}) },
       ai: { ...base.settings.ai, ...((raw.settings || {}).ai || {}) },
+      richMenu: { ...base.settings.richMenu, ...((raw.settings || {}).richMenu || {}) },
     },
   };
 }

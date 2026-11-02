@@ -2,8 +2,10 @@
 // LINE Messaging API: ส่งข้อความ, ตรวจลายเซ็น webhook และสร้าง Flex Message
 const crypto = require('crypto');
 const { DAY_NAMES } = require('./time');
+const cal = require('./calendar');
 
 const API = 'https://api.line.me/v2/bot';
+const DATA_API = 'https://api-data.line.me/v2/bot';
 
 function creds(settings) {
   return {
@@ -67,6 +69,44 @@ const botInfo = (settings) => call(creds(settings).token, '/info', null, 'GET');
 const profile = (settings, userId) => call(creds(settings).token, `/profile/${encodeURIComponent(userId)}`, null, 'GET');
 const groupSummary = (settings, groupId) => call(creds(settings).token, `/group/${encodeURIComponent(groupId)}/summary`, null, 'GET');
 
+/** multicast ถึงผู้ใช้ได้ครั้งละไม่เกิน 500 คน */
+async function multicast(settings, userIds, messages) {
+  const token = creds(settings).token;
+  for (let i = 0; i < userIds.length; i += 500) {
+    await call(token, '/message/multicast', { to: userIds.slice(i, i + 500), messages });
+  }
+}
+const push = (settings, to, messages) => call(creds(settings).token, '/message/push', { to, messages });
+const broadcast = (settings, messages) => call(creds(settings).token, '/message/broadcast', { messages });
+
+// ---------------- Rich menu ----------------
+const richMenu = {
+  create: (settings, menu) => call(creds(settings).token, '/richmenu', menu),
+  async upload(settings, richMenuId, png) {
+    const token = creds(settings).token;
+    if (!token) throw new Error('ยังไม่ได้ตั้งค่า Channel Access Token');
+    let res;
+    try {
+      res = await fetch(`${DATA_API}/richmenu/${encodeURIComponent(richMenuId)}/content`, {
+        method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'image/png' }, body: png,
+        signal: AbortSignal.timeout(30000),
+      });
+    } catch (e) { throw new Error(`อัปโหลดรูปริชเมนูไม่ได้ (${e.cause?.code || e.name})`); }
+    if (!res.ok) throw new Error(`LINE API ${res.status}: ${await res.text()}`);
+  },
+  setDefault: (settings, id) => call(creds(settings).token, `/user/all/richmenu/${encodeURIComponent(id)}`, {}),
+  clearDefault: (settings) => call(creds(settings).token, '/user/all/richmenu', null, 'DELETE'),
+  linkUser: (settings, userId, id) => call(creds(settings).token, `/user/${encodeURIComponent(userId)}/richmenu/${encodeURIComponent(id)}`, {}),
+  unlinkUser: (settings, userId) => call(creds(settings).token, `/user/${encodeURIComponent(userId)}/richmenu`, null, 'DELETE'),
+  async bulkLink(settings, id, userIds) {
+    for (let i = 0; i < userIds.length; i += 500) {
+      await call(creds(settings).token, '/richmenu/bulk/link', { richMenuId: id, userIds: userIds.slice(i, i + 500) });
+    }
+  },
+  remove: (settings, id) => call(creds(settings).token, `/richmenu/${encodeURIComponent(id)}`, null, 'DELETE'),
+  list: (settings) => call(creds(settings).token, '/richmenu/list', null, 'GET'),
+};
+
 // ---------------- Flex Message ----------------
 
 function hex(c, fallback = '#4f46e5') {
@@ -114,7 +154,7 @@ function minutesLabel(m) {
 }
 
 /** Bubble แจ้งเตือนคาบเรียน */
-function classBubble(cls, room, { minutesBefore, settings, dateLabel }) {
+function classBubble(cls, room, { minutesBefore, settings, dateLabel, group }) {
   const color = hex(cls.color || room?.color, hex(settings.accentColor));
   const url = navUrl(room);
   const place = [room?.building, room?.floor ? `ชั้น ${room.floor}` : ''].filter(Boolean).join(' · ');
@@ -154,7 +194,7 @@ function classBubble(cls, room, { minutesBefore, settings, dateLabel }) {
               contents: [{ type: 'text', text: minutesBefore != null ? `⏰ ${minutesLabel(minutesBefore)}` : `📅 ${dateLabel || ''}`, size: 'xs', color: '#ffffff', weight: 'bold' }],
             },
             { type: 'filler' },
-            { type: 'text', text: trim(settings.appName || 'ตารางสอน', 30), size: 'xs', color: '#ffffffcc', align: 'end', gravity: 'center', flex: 0 },
+            { type: 'text', text: trim(group ? group.name : settings.appName || 'ตารางสอน', 30), size: group ? 'sm' : 'xs', weight: group ? 'bold' : 'regular', color: group ? '#ffffff' : '#ffffffcc', align: 'end', gravity: 'center', flex: 0 },
           ],
         },
         { type: 'text', text: trim(cls.subject, 80), size: 'xl', weight: 'bold', color: '#ffffff', wrap: true, margin: 'md' },
@@ -167,39 +207,46 @@ function classBubble(cls, room, { minutesBefore, settings, dateLabel }) {
   };
 }
 
-function reminderMessage(cls, room, minutesBefore, settings) {
+function reminderMessage(cls, room, minutesBefore, settings, group) {
   const where = room ? ` ที่ ${room.name}` : '';
   return {
     type: 'flex',
-    altText: trim(`⏰ ${minutesLabel(minutesBefore)} เรียน ${cls.subject}${where} (${cls.start} น.)`, 400),
-    contents: classBubble(cls, room, { minutesBefore, settings }),
+    altText: trim(`⏰ ${group ? `${group.name} · ` : ''}${minutesLabel(minutesBefore)} เรียน ${cls.subject}${where} (${cls.start} น.)`, 400),
+    contents: classBubble(cls, room, { minutesBefore, settings, group }),
   };
 }
 
-/** สรุปตารางของวัน (carousel ไม่เกิน 12 bubble) */
-function dayScheduleMessage(classes, rooms, weekday, settings, title) {
-  const accent = hex(settings.accentColor);
+function dayHeader(weekday, title, subtitle) {
+  const bg = cal.DAY_COLORS[weekday], fg = cal.DAY_TEXT[weekday];
+  return {
+    type: 'box', layout: 'vertical', paddingAll: '18px', backgroundColor: bg, contents: [
+      { type: 'text', text: trim(title, 60), color: fg, weight: 'bold', size: 'lg', wrap: true },
+      { type: 'text', text: trim(subtitle, 120), color: fg === '#ffffff' ? '#ffffffcc' : '#3b2f00cc', size: 'xs', wrap: true },
+    ],
+  };
+}
+
+/** bubble ตารางของวันหนึ่ง (หัวสีตามวัน) */
+function dayScheduleBubble(classes, rooms, weekday, settings, title, subtitle) {
+  const sub = subtitle || `วัน${DAY_NAMES[weekday]}`;
   if (!classes.length) {
     return {
-      type: 'flex', altText: `${title}: ไม่มีคาบเรียน`,
-      contents: {
-        type: 'bubble', size: 'kilo',
-        body: {
-          type: 'box', layout: 'vertical', paddingAll: '24px', spacing: 'md', contents: [
-            { type: 'text', text: '🎉', size: '3xl', align: 'center' },
-            { type: 'text', text: title, weight: 'bold', size: 'lg', align: 'center', color: accent },
-            { type: 'text', text: `วัน${DAY_NAMES[weekday]}ไม่มีคาบเรียน`, size: 'sm', align: 'center', color: '#64748b' },
-          ],
-        },
+      type: 'bubble', size: 'kilo',
+      header: dayHeader(weekday, title, sub),
+      body: {
+        type: 'box', layout: 'vertical', paddingAll: '20px', spacing: 'sm', contents: [
+          { type: 'text', text: '🎉', size: 'xxl', align: 'center' },
+          { type: 'text', text: 'ไม่มีคาบเรียน', size: 'sm', align: 'center', color: '#64748b' },
+        ],
       },
     };
   }
+  const accent = hex(settings.accentColor);
   const items = classes.slice(0, 20).map((c) => {
     const room = rooms.find((r) => r.id === c.roomId);
     const color = hex(c.color, accent);
-    return {
+    const box = {
       type: 'box', layout: 'horizontal', spacing: 'md', paddingAll: '10px', cornerRadius: '10px', backgroundColor: tint(color, 0.9),
-      action: navUrl(room) ? { type: 'uri', label: 'นำทาง', uri: navUrl(room) } : undefined,
       contents: [
         { type: 'box', layout: 'vertical', width: '4px', backgroundColor: color, cornerRadius: '2px', contents: [{ type: 'filler' }] },
         {
@@ -211,21 +258,118 @@ function dayScheduleMessage(classes, rooms, weekday, settings, title) {
         {
           type: 'box', layout: 'vertical', flex: 6, contents: [
             { type: 'text', text: trim(c.subject, 60), size: 'sm', weight: 'bold', color: '#1e293b', wrap: true },
-            { type: 'text', text: `📍 ${room ? room.name : '-'}${navUrl(room) ? '  ›' : ''}`, size: 'xs', color: '#64748b', wrap: true },
+            { type: 'text', text: `📍 ${room ? trim(room.name, 60) : '-'}${navUrl(room) ? '  ›' : ''}`, size: 'xs', color: '#64748b', wrap: true },
           ],
         },
       ],
     };
+    if (navUrl(room)) box.action = { type: 'uri', label: 'นำทาง', uri: navUrl(room) };
+    return box;
   });
-
   return {
-    type: 'flex', altText: `${title}: ${classes.length} คาบ`,
+    type: 'bubble', size: 'mega',
+    header: dayHeader(weekday, title, `${sub} · ${classes.length} คาบ · แตะเพื่อนำทาง`),
+    body: { type: 'box', layout: 'vertical', spacing: 'sm', paddingAll: '14px', contents: items },
+  };
+}
+
+function dayScheduleMessage(classes, rooms, weekday, settings, title, subtitle) {
+  return {
+    type: 'flex',
+    altText: trim(`${title}: ${classes.length ? `${classes.length} คาบ` : 'ไม่มีคาบเรียน'}`, 400),
+    contents: dayScheduleBubble(classes, rooms, weekday, settings, title, subtitle),
+  };
+}
+
+/** ตารางทั้งสัปดาห์ (carousel วันละ 1 bubble) */
+function weekScheduleMessage(byDay, rooms, settings, groupName) {
+  const bubbles = byDay.slice(0, 12).map(({ weekday, classes }) => dayScheduleBubble(classes, rooms, weekday, settings, `วัน${DAY_NAMES[weekday]}`, groupName || 'ตารางเรียน'));
+  return { type: 'flex', altText: `ตารางเรียนทั้งสัปดาห์${groupName ? ` ${groupName}` : ''}`, contents: { type: 'carousel', contents: bubbles } };
+}
+
+/** แจ้งวันพิเศษ: mode = today | tomorrow | ask (ถามตารางในวันพิเศษ) */
+function specialDayBubble(sd, dateKey, db, mode = 'today') {
+  const t = cal.typeInfo(sd.type);
+  const total = cal.daysBetween(sd.start, sd.end) + 1;
+  const nth = cal.daysBetween(sd.start, dateKey) + 1;
+  const reopen = cal.nextSchoolDay(db, sd.end);
+  const suspended = sd.suspendClasses !== false;
+  const headline = mode === 'tomorrow'
+    ? (suspended ? 'พรุ่งนี้หยุดเรียน' : `พรุ่งนี้${t.label}`)
+    : (suspended ? 'วันนี้หยุดเรียน' : `วันนี้${t.label}`);
+  const rows = [
+    row('📅', 'วันที่', cal.thaiDate(dateKey, { weekday: true })),
+    row('🗓️', 'ช่วง', `${cal.thaiRange(sd.start, sd.end)}${total > 1 ? ` (${total} วัน)` : ''}`),
+  ];
+  if (total > 1 && mode !== 'tomorrow' && nth >= 1) rows.push(row('⏳', 'วันที่', `${nth} จาก ${total} วัน`));
+  if (suspended && reopen) rows.push(row('🏫', 'เปิดเรียน', cal.thaiDate(reopen, { weekday: true }), t.color));
+  if (sd.note) {
+    rows.push({ type: 'separator', margin: 'lg', color: '#e2e8f0' });
+    rows.push({ type: 'text', text: `📝 ${trim(sd.note, 400)}`, size: 'sm', color: '#334155', wrap: true, margin: 'lg' });
+  }
+  return {
+    type: 'bubble', size: 'mega',
+    header: {
+      type: 'box', layout: 'vertical', paddingAll: '20px', backgroundColor: t.color, spacing: 'sm', contents: [
+        {
+          type: 'box', layout: 'horizontal', contents: [
+            {
+              type: 'box', layout: 'vertical', flex: 0, paddingStart: '10px', paddingEnd: '10px', paddingTop: '3px', paddingBottom: '3px',
+              cornerRadius: '20px', backgroundColor: '#ffffff33',
+              contents: [{ type: 'text', text: `${mode === 'tomorrow' ? '🔔' : '📢'} ${t.label}`, size: 'xs', color: '#ffffff', weight: 'bold' }],
+            },
+            { type: 'filler' },
+            { type: 'text', text: trim(db.settings.schoolName || db.settings.appName || 'ตารางสอน', 30), size: 'xs', color: '#ffffffcc', align: 'end', gravity: 'center', flex: 0 },
+          ],
+        },
+        { type: 'text', text: headline, size: 'sm', color: '#ffffffdd', margin: 'md' },
+        { type: 'text', text: trim(sd.name, 80), size: 'xl', weight: 'bold', color: '#ffffff', wrap: true },
+      ],
+    },
+    body: { type: 'box', layout: 'vertical', spacing: 'md', paddingAll: '20px', contents: rows },
+    footer: {
+      type: 'box', layout: 'vertical', paddingAll: '14px', paddingTop: '0px', contents: [
+        { type: 'button', style: 'link', height: 'sm', color: t.color, action: { type: 'message', label: 'ดูวันหยุดทั้งหมด', text: 'วันหยุด' } },
+      ],
+    },
+    styles: { footer: { separator: false } },
+  };
+}
+function specialDayMessage(sd, dateKey, db, mode = 'today') {
+  const t = cal.typeInfo(sd.type);
+  const when = mode === 'tomorrow' ? 'พรุ่งนี้' : 'วันนี้';
+  const verb = sd.suspendClasses !== false ? 'หยุดเรียน' : t.label;
+  return { type: 'flex', altText: trim(`📢 ${when}${verb}: ${sd.name} (${cal.thaiRange(sd.start, sd.end)})`, 400), contents: specialDayBubble(sd, dateKey, db, mode) };
+}
+
+/** รายการวันพิเศษที่จะมาถึง */
+function upcomingSpecialMessage(list, db, todayKey) {
+  const accent = hex(db.settings.accentColor);
+  const items = list.length ? list.map((sd) => {
+    const t = cal.typeInfo(sd.type);
+    const now = sd.start <= todayKey && todayKey <= sd.end;
+    return {
+      type: 'box', layout: 'horizontal', spacing: 'md', paddingAll: '10px', cornerRadius: '10px', backgroundColor: tint(t.color, 0.9),
+      contents: [
+        { type: 'box', layout: 'vertical', width: '4px', backgroundColor: t.color, cornerRadius: '2px', contents: [{ type: 'filler' }] },
+        {
+          type: 'box', layout: 'vertical', flex: 1, contents: [
+            { type: 'text', text: `${now ? '● ตอนนี้ · ' : ''}${t.label}`, size: 'xxs', color: t.color, weight: 'bold' },
+            { type: 'text', text: trim(sd.name, 60), size: 'sm', weight: 'bold', color: '#1e293b', wrap: true },
+            { type: 'text', text: cal.thaiRange(sd.start, sd.end), size: 'xs', color: '#64748b' },
+          ],
+        },
+      ],
+    };
+  }) : [{ type: 'text', text: 'ยังไม่มีวันหยุดหรือกิจกรรมที่จะมาถึง', size: 'sm', color: '#64748b', wrap: true, align: 'center' }];
+  return {
+    type: 'flex', altText: 'วันหยุดและกิจกรรมที่จะมาถึง',
     contents: {
       type: 'bubble', size: 'mega',
       header: {
         type: 'box', layout: 'vertical', paddingAll: '18px', backgroundColor: accent, contents: [
-          { type: 'text', text: title, color: '#ffffff', weight: 'bold', size: 'lg' },
-          { type: 'text', text: `วัน${DAY_NAMES[weekday]} · ${classes.length} คาบ · แตะเพื่อนำทาง`, color: '#ffffffcc', size: 'xs' },
+          { type: 'text', text: 'วันหยุดและกิจกรรม', color: '#ffffff', weight: 'bold', size: 'lg' },
+          { type: 'text', text: 'หยุดทั้งโรงเรียน', color: '#ffffffcc', size: 'xs' },
         ],
       },
       body: { type: 'box', layout: 'vertical', spacing: 'sm', paddingAll: '14px', contents: items },
@@ -233,4 +377,8 @@ function dayScheduleMessage(classes, rooms, weekday, settings, title) {
   };
 }
 
-module.exports = { creds, call, verifySignature, send, reply, botInfo, profile, groupSummary, navUrl, classBubble, reminderMessage, dayScheduleMessage, minutesLabel };
+module.exports = {
+  creds, call, verifySignature, send, reply, botInfo, profile, groupSummary, multicast, push, broadcast, richMenu,
+  navUrl, classBubble, reminderMessage, dayScheduleMessage, dayScheduleBubble, weekScheduleMessage,
+  specialDayMessage, upcomingSpecialMessage, minutesLabel,
+};

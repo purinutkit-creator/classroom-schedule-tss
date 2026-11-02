@@ -126,7 +126,9 @@ const overlap = (a, b) => toMin(a.start) < toMin(b.end) && toMin(b.start) < toMi
  * ตรวจแต่ละรายการ: รูปแบบเวลา, ห้องที่มีอยู่, ซ้ำกับตารางเดิม, ชนเวลากับคาบอื่น
  * status: ok | duplicate | conflict | invalid
  */
-function review(entries, db) {
+function review(entries, db, groupId = null) {
+  // ตรวจซ้ำ/ชนเฉพาะคาบของชั้นเรียนเดียวกัน (รวมคาบที่ใช้ร่วมทุกห้อง)
+  db = { ...db, classes: db.classes.filter((c) => !c.groupId || !groupId || c.groupId === groupId) };
   const out = [];
   for (const raw of entries) {
     const e = {

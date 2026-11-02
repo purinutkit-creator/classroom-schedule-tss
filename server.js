@@ -9,6 +9,9 @@ const store = require('./src/store');
 const line = require('./src/line');
 const scheduler = require('./src/scheduler');
 const vision = require('./src/vision');
+const cal = require('./src/calendar');
+const notify = require('./src/notify');
+const richmenu = require('./src/richmenu');
 const { DAY_NAMES, localParts, isValidTime, isValidTimeZone, toMin } = require('./src/time');
 
 const app = express();
@@ -61,23 +64,80 @@ async function handleEvent(ev) {
   if (!ev.replyToken) return;
   if (ev.type === 'follow' || ev.type === 'join') {
     return line.reply(db.settings, ev.replyToken, [
-      { type: 'text', text: `สวัสดีครับ 👋 ระบบ${db.settings.appName}จะแจ้งเตือนก่อนเริ่มคาบเรียนให้อัตโนมัติ\n\nพิมพ์ "ตารางวันนี้" หรือ "ตารางพรุ่งนี้" เพื่อดูตารางได้เลย` },
+      { type: 'text', text: `สวัสดีครับ 👋 ระบบ${db.settings.appName}จะแจ้งเตือนก่อนเริ่มคาบเรียนให้อัตโนมัติ\n\nกดเมนูด้านล่าง หรือพิมพ์ "ตารางวันนี้" "ตารางพรุ่งนี้" "คาบถัดไป" "วันหยุด" ได้เลย` },
     ]);
   }
   if (ev.type === 'message' && ev.message?.type === 'text' && db.settings.line.replyKeywords) {
-    const t = ev.message.text.trim();
-    const now = localParts(new Date(), db.settings.timezone);
-    let weekday = null, title = '';
-    if (/ตาราง(วันนี้)?$|^today$/i.test(t)) { weekday = now.weekday; title = 'ตารางเรียนวันนี้'; }
-    else if (/พรุ่งนี้|^tomorrow$/i.test(t)) { weekday = (now.weekday + 1) % 7; title = 'ตารางเรียนพรุ่งนี้'; }
-    else {
-      const idx = DAY_NAMES.findIndex((d) => t.includes(d));
-      if (idx >= 0 && t.includes('ตาราง')) { weekday = idx; title = `ตารางเรียนวัน${DAY_NAMES[idx]}`; }
-    }
-    if (weekday === null) return;
-    const list = db.classes.filter((c) => Number(c.day) === weekday).sort((a, b) => toMin(a.start) - toMin(b.start));
-    return line.reply(db.settings, ev.replyToken, [line.dayScheduleMessage(list, db.rooms, weekday, db.settings, title)]);
+    const msgs = keywordReply(db, ev.message.text, db.recipients.find((x) => x.id === id));
+    if (msgs) return line.reply(db.settings, ev.replyToken, msgs);
   }
+}
+
+/** คาบเรียนของชั้น/ห้อง (คาบที่ไม่ระบุห้อง = ทุกห้อง) */
+function classesFor(db, groupId, weekday) {
+  return db.classes
+    .filter((c) => c.day === weekday && (!c.groupId || c.groupId === groupId))
+    .sort((a, b) => toMin(a.start) - toMin(b.start));
+}
+
+/** ตอบคำสั่งจากเมนู/ข้อความ ตามชั้นเรียนของผู้ส่ง */
+function keywordReply(db, text, recipient) {
+  const t = String(text || '').trim();
+  const tz = db.settings.timezone;
+  const now = localParts(new Date(), tz);
+  const todayKey = richmenu.todayKeyOf(db);
+  const group = recipient?.groupId ? db.groups.find((g) => g.id === recipient.groupId) : null;
+  const gid = group ? group.id : null;
+  const gname = group ? group.name : '';
+  const noGroupNote = !group && db.groups.length
+    ? [{ type: 'text', text: 'ℹ️ บัญชีนี้ยังไม่ได้ผูกกับชั้นเรียน จึงแสดงเฉพาะคาบที่ใช้ร่วมทุกห้อง กรุณาแจ้งครู/ผู้ดูแลระบบให้กำหนดชั้นเรียนให้' }]
+    : [];
+
+  const dayReply = (key, title) => {
+    const sd = cal.specialOn(db, key);
+    if (sd && sd.suspendClasses !== false) return [line.specialDayMessage(sd, key, db, key === todayKey ? 'today' : 'tomorrow')];
+    const wd = cal.weekdayOf(key);
+    const sub = [gname, cal.thaiDate(key, { weekday: true })].filter(Boolean).join(' · ');
+    const msgs = [line.dayScheduleMessage(classesFor(db, gid, wd), db.rooms, wd, db.settings, title, sub)];
+    if (sd) msgs.push(line.specialDayMessage(sd, key, db, key === todayKey ? 'today' : 'tomorrow'));
+    return msgs.concat(noGroupNote);
+  };
+
+  if (/^(ตาราง)?วันนี้$|^ตาราง$|^today$/i.test(t)) return dayReply(todayKey, 'ตารางเรียนวันนี้');
+  if (/^(ตาราง)?พรุ่งนี้$|^tomorrow$/i.test(t)) return dayReply(cal.shiftKey(todayKey, 1), 'ตารางเรียนพรุ่งนี้');
+  if (/ทั้งสัปดาห์|^ตารางสัปดาห์$|^week$/i.test(t)) {
+    const days = [...(db.settings.visibleDays || [1, 2, 3, 4, 5])].sort((a, b) => ((a + 6) % 7) - ((b + 6) % 7));
+    return [line.weekScheduleMessage(days.map((wd) => ({ weekday: wd, classes: classesFor(db, gid, wd) })), db.rooms, db.settings, gname)].concat(noGroupNote);
+  }
+  if (/^คาบ(ถัดไป|ต่อไป)$|^next$/i.test(t)) {
+    const nowMin = now.hour * 60 + now.minute;
+    for (let off = 0; off < 21; off++) {
+      const key = cal.shiftKey(todayKey, off);
+      if (cal.isSuspended(db, key)) continue;
+      const c = classesFor(db, gid, cal.weekdayOf(key)).find((x) => off > 0 || toMin(x.start) > nowMin);
+      if (c) {
+        const room = db.rooms.find((r) => r.id === c.roomId);
+        const mins = off * 1440 + toMin(c.start) - nowMin;
+        const label = off === 0 ? 'วันนี้' : off === 1 ? 'พรุ่งนี้' : cal.thaiDate(key, { short: true, weekday: false });
+        const msg = mins < 24 * 60
+          ? line.reminderMessage(c, room, mins, db.settings, group)
+          : { type: 'flex', altText: `คาบถัดไป: ${c.subject} ${label}`, contents: line.classBubble(c, room, { settings: db.settings, dateLabel: `${label} ${c.start} น.`, group }) };
+        return [msg].concat(noGroupNote);
+      }
+    }
+    return [{ type: 'text', text: 'ไม่พบคาบเรียนในอีก 3 สัปดาห์ข้างหน้า' }].concat(noGroupNote);
+  }
+  if (/^(วันหยุด|ปฏิทิน|กิจกรรม|holiday)/i.test(t)) return [line.upcomingSpecialMessage(cal.upcoming(db, todayKey, 10), db, todayKey)];
+  if (/^ห้องของฉัน$|^ชั้นของฉัน$/.test(t)) {
+    if (!group) return [{ type: 'text', text: 'บัญชีนี้ยังไม่ได้ผูกกับชั้นเรียน กรุณาแจ้งครู/ผู้ดูแลระบบให้กำหนด ม./ห้อง ให้ แล้วเมนูและการแจ้งเตือนจะเปลี่ยนเป็นของห้องคุณอัตโนมัติ' }];
+    const count = db.classes.filter((c) => c.groupId === gid).length;
+    return [{ type: 'text', text: `🏫 ชั้นเรียนของคุณ: ${group.name}\n📚 ${count} คาบต่อสัปดาห์\n🔔 แจ้งเตือนก่อนเริ่มคาบผ่าน LINE อัตโนมัติ${group.note ? `\n📝 ${group.note}` : ''}` }];
+  }
+  const idx = DAY_NAMES.findIndex((d) => t.includes(d));
+  if (idx >= 0 && t.includes('ตาราง')) {
+    return [line.dayScheduleMessage(classesFor(db, gid, idx), db.rooms, idx, db.settings, `ตารางเรียนวัน${DAY_NAMES[idx]}`, gname || undefined)].concat(noGroupNote);
+  }
+  return null;
 }
 
 // ---------- ทั่วไป ----------
@@ -154,6 +214,8 @@ app.get('/api/state', (req, res) => {
   res.json({
     settings: maskedSettings(db.settings),
     rooms: db.rooms, classes: db.classes, recipients: db.recipients, fonts: db.fonts,
+    groups: db.groups, specialDays: db.specialDays,
+    todayKey: richmenu.todayKeyOf(db),
     history: db.history.slice(0, 30),
     storage: store.usingPostgres ? 'postgres' : 'file',
     now,
@@ -166,7 +228,9 @@ const pick = (obj, keys) => Object.fromEntries(keys.filter((k) => obj[k] !== und
 app.put('/api/settings', (req, res) => {
   const s = store.db.settings;
   const b = req.body || {};
-  const next = pick(b, ['appName', 'schoolName', 'contactEmail', 'timezone', 'defaultReminderMinutes', 'remindersEnabled', 'visibleDays', 'dayStart', 'dayEnd', 'accentColor']);
+  const next = pick(b, ['appName', 'schoolName', 'contactEmail', 'timezone', 'defaultReminderMinutes', 'remindersEnabled', 'visibleDays', 'dayStart', 'dayEnd', 'accentColor', 'announceEnabled', 'announceTime', 'announceEve']);
+  if (next.announceTime !== undefined && !isValidTime(next.announceTime)) return res.status(400).json({ error: 'เวลาประกาศไม่ถูกต้อง' });
+  for (const k of ['announceEnabled', 'announceEve']) if (next[k] !== undefined) next[k] = !!next[k];
   if (next.contactEmail !== undefined) {
     next.contactEmail = String(next.contactEmail).trim().slice(0, 120);
     if (next.contactEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(next.contactEmail)) return res.status(400).json({ error: 'อีเมลติดต่อไม่ถูกต้อง' });
@@ -189,6 +253,7 @@ app.put('/api/settings', (req, res) => {
     };
   }
   Object.assign(s, next);
+  markDirty();
   store.save();
   res.json(maskedSettings(s));
 });
@@ -225,7 +290,7 @@ function buildMessage(db, body) {
   if (!cls) throw Object.assign(new Error('ไม่พบคาบเรียน'), { status: 404 });
   const room = db.rooms.find((r) => r.id === cls.roomId);
   const minutes = body.minutes ?? scheduler.reminderMinutesOf(cls, db.settings);
-  return line.reminderMessage(cls, room, Number(minutes), db.settings);
+  return line.reminderMessage(cls, room, Number(minutes), db.settings, db.groups.find((g) => g.id === cls.groupId));
 }
 app.post('/api/line/preview', (req, res) => {
   try { res.json(buildMessage(store.db, req.body || {})); }
@@ -241,6 +306,100 @@ app.post('/api/line/test', async (req, res) => {
     res.json({ ok: true, result });
   } catch (e) { res.status(e.status || 400).json({ error: e.message }); }
 });
+
+// ---------- ริชเมนูรายวัน ----------
+function markDirty() {
+  const rm = store.db.settings.richMenu;
+  if (rm && rm.enabled) { rm.dirtyAt = Date.now(); rm.failedAt = null; }
+}
+app.get('/api/richmenu/preview.png', (req, res) => {
+  const db = store.db;
+  const gid = req.query.group && db.groups.some((g) => g.id === req.query.group) ? req.query.group : null;
+  const key = cal.isDateKey(req.query.date) ? req.query.date : richmenu.todayKeyOf(db);
+  try { res.type('png').set('Cache-Control', 'no-store').send(richmenu.preview(db, gid, key)); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.put('/api/richmenu', async (req, res) => {
+  const db = store.db;
+  const rm = db.settings.richMenu;
+  const b = req.body || {};
+  try {
+    if (typeof b.selected === 'boolean') rm.selected = b.selected;
+    if (typeof b.enabled === 'boolean' && b.enabled !== rm.enabled) {
+      rm.enabled = b.enabled;
+      if (!b.enabled && line.creds(db.settings).token) await richmenu.removeAll(db);
+      if (b.enabled) { rm.builtFor = null; rm.failedAt = null; }
+    }
+    store.save();
+    res.json(maskedSettings(db.settings));
+  } catch (e) { store.save(); res.status(400).json({ error: e.message }); }
+});
+app.post('/api/richmenu/rebuild', async (req, res) => {
+  const db = store.db;
+  if (!db.settings.richMenu.enabled) return res.status(400).json({ error: 'กรุณาเปิดใช้ริชเมนูก่อน' });
+  if (!line.creds(db.settings).token) return res.status(400).json({ error: 'ยังไม่ได้ตั้งค่า Channel Access Token' });
+  try { res.json({ ok: true, ...(await scheduler.richMenuTick(db, { force: true })) }); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// ---------- ประกาศวันหยุด ----------
+app.post('/api/announce/preview', (req, res) => {
+  const db = store.db;
+  const sd = db.specialDays.find((x) => x.id === req.body?.id) || req.body?.special;
+  if (!sd) return res.status(404).json({ error: 'ไม่พบวันพิเศษ' });
+  const key = cal.isDateKey(sd.start) ? sd.start : richmenu.todayKeyOf(db);
+  res.json(line.specialDayMessage(sd, key, db, req.body?.mode === 'tomorrow' ? 'tomorrow' : 'today'));
+});
+app.post('/api/announce/test', async (req, res) => {
+  const db = store.db;
+  const sd = db.specialDays.find((x) => x.id === req.body?.id);
+  if (!sd) return res.status(404).json({ error: 'ไม่พบวันพิเศษ' });
+  try { res.json({ ok: true, detail: await notify.sendToAll(db, [line.specialDayMessage(sd, sd.start, db, 'today')]) }); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// ---------- ชั้นเรียน (ม./ห้อง) ----------
+function cleanGroup(b, current) {
+  const name = String(b.name || '').trim().replace(/\s+/g, ' ');
+  if (!name) throw new Error('กรุณาใส่ชื่อชั้นเรียน เช่น ม.4/1');
+  if (store.db.groups.some((g) => g.name === name && g.id !== current?.id)) throw new Error(`มีชั้นเรียน ${name} แล้ว`);
+  return { name: name.slice(0, 40), note: String(b.note || '').trim().slice(0, 200) };
+}
+crud('groups', cleanGroup, (id) => {
+  for (const c of store.db.classes) if (c.groupId === id) c.groupId = null;
+  for (const r of store.db.recipients) if (r.groupId === id) r.groupId = null;
+});
+app.post('/api/groups/bulk', (req, res) => {
+  const names = (Array.isArray(req.body?.names) ? req.body.names : []).map((n) => String(n).trim()).filter(Boolean).slice(0, 200);
+  const added = [];
+  for (const name of names) {
+    if (store.db.groups.some((g) => g.name === name)) continue;
+    const g = { id: store.uid(), ...cleanGroup({ name }) };
+    store.db.groups.push(g); added.push(g);
+  }
+  sortGroups(); markDirty(); store.save();
+  res.json({ added: added.length });
+});
+function sortGroups() {
+  store.db.groups.sort((a, b) => a.name.localeCompare(b.name, 'th', { numeric: true }));
+}
+
+// ---------- วันพิเศษ (หยุดทั้งโรงเรียน) ----------
+function cleanSpecial(b) {
+  const name = String(b.name || '').trim();
+  if (!name) throw new Error('กรุณาใส่ชื่อวันพิเศษ');
+  if (!cal.TYPES[b.type]) throw new Error('ประเภทไม่ถูกต้อง');
+  if (!cal.isDateKey(b.start) || !cal.isDateKey(b.end || b.start)) throw new Error('วันที่ไม่ถูกต้อง');
+  const end = b.end || b.start;
+  if (end < b.start) throw new Error('วันสิ้นสุดต้องไม่ก่อนวันเริ่ม');
+  if (cal.daysBetween(b.start, end) > 366) throw new Error('ช่วงวันยาวเกิน 1 ปี');
+  return {
+    name: name.slice(0, 80), type: b.type, start: b.start, end,
+    suspendClasses: b.type === 'activity' ? b.suspendClasses !== false : true,
+    note: String(b.note || '').trim().slice(0, 300),
+  };
+}
+crud('specialDays', cleanSpecial);
 
 // ---------- Rooms ----------
 function cleanRoom(b) {
@@ -279,7 +438,9 @@ function cleanClass(b) {
     if (!Number.isInteger(rm) || rm < 0 || rm > 1440) throw new Error('นาทีแจ้งเตือนต้องอยู่ระหว่าง 0–1440');
   }
   const roomId = b.roomId && store.db.rooms.some((r) => r.id === b.roomId) ? b.roomId : null;
+  const groupId = b.groupId && store.db.groups.some((g) => g.id === b.groupId) ? b.groupId : null;
   return {
+    groupId,
     subject: subject.slice(0, 100),
     code: String(b.code || '').trim().slice(0, 40),
     teacher: String(b.teacher || '').trim().slice(0, 80),
@@ -296,16 +457,19 @@ function crud(name, clean, onDelete) {
   app.post(`/api/${name}`, (req, res) => {
     try {
       const item = { id: store.uid(), ...clean(req.body || {}) };
-      store.db[name].push(item); store.save(); res.status(201).json(item);
+      store.db[name].push(item);
+      if (name === 'groups') sortGroups();
+      markDirty(); store.save(); res.status(201).json(item);
     } catch (e) { res.status(400).json({ error: e.message }); }
   });
   app.put(`/api/${name}/:id`, (req, res) => {
     const item = store.db[name].find((x) => x.id === req.params.id);
     if (!item) return res.status(404).json({ error: 'ไม่พบข้อมูล' });
     try {
-      Object.assign(item, clean({ ...item, ...req.body }));
+      Object.assign(item, clean({ ...item, ...req.body }, item));
       if (name === 'classes') clearSentFor(item.id); // แก้เวลาแล้วให้แจ้งเตือนใหม่ได้
-      store.save(); res.json(item);
+      if (name === 'groups') sortGroups();
+      markDirty(); store.save(); res.json(item);
     } catch (e) { res.status(400).json({ error: e.message }); }
   });
   app.delete(`/api/${name}/:id`, (req, res) => {
@@ -314,7 +478,7 @@ function crud(name, clean, onDelete) {
     if (i < 0) return res.status(404).json({ error: 'ไม่พบข้อมูล' });
     list.splice(i, 1);
     onDelete?.(req.params.id);
-    store.save(); res.json({ ok: true });
+    markDirty(); store.save(); res.json({ ok: true });
   });
 }
 function clearSentFor(classId) {
@@ -334,6 +498,14 @@ app.put('/api/recipients/:id', (req, res) => {
   if (!r) return res.status(404).json({ error: 'ไม่พบผู้รับ' });
   if (typeof req.body.enabled === 'boolean') r.enabled = req.body.enabled;
   if (typeof req.body.name === 'string') r.name = req.body.name.slice(0, 80);
+  if (req.body.groupId !== undefined) {
+    const gid = req.body.groupId && store.db.groups.some((g) => g.id === req.body.groupId) ? req.body.groupId : null;
+    if (gid !== (r.groupId || null)) {
+      r.groupId = gid;
+      // เปลี่ยนริชเมนูของผู้ใช้คนนี้ให้เป็นของชั้นเรียนใหม่ทันที
+      richmenu.linkRecipient(store.db, r).catch((e) => console.error('[richmenu] link:', e.message));
+    }
+  }
   store.save(); res.json(r);
 });
 app.delete('/api/recipients/:id', (req, res) => {
@@ -407,7 +579,7 @@ function commitEntries(list) {
       const same = db.classes.find((c) => c.subject.trim().toLowerCase() === String(e.subject).trim().toLowerCase());
       const used = new Set(db.classes.map((c) => c.color));
       const color = e.color || same?.color || CLASS_COLORS.find((c) => !used.has(c)) || CLASS_COLORS[db.classes.length % CLASS_COLORS.length];
-      const item = { id: store.uid(), ...cleanClass({ ...e, roomId, color, reminderEnabled: true, reminderMinutes: null, note: e.note || '' }) };
+      const item = { id: store.uid(), ...cleanClass({ ...e, groupId: e.groupId || null, roomId, color, reminderEnabled: true, reminderMinutes: null, note: e.note || '' }) };
       db.classes.push(item);
       added.push(item);
       results.push({ ok: true, id: item.id });
@@ -428,7 +600,9 @@ app.post('/api/vision/analyze', (req, res) => {
       const result = await vision.extractFromImage(store.db.settings, {
         data: req.file.buffer.toString('base64'), mediaType: req.file.mimetype, hint: req.body.hint,
       });
-      const entries = vision.review(result.entries, store.db);
+      const groupId = req.body.groupId && store.db.groups.some((g) => g.id === req.body.groupId) ? req.body.groupId : null;
+      const entries = vision.review(result.entries, store.db, groupId);
+      entries.forEach((e) => { e.groupId = groupId; });
       let commit = null;
       if (req.body.auto === '1') {
         const ok = entries.filter((e) => e.status === 'ok');
@@ -452,15 +626,17 @@ app.post('/api/vision/commit', (req, res) => {
 // ---------- Backup ----------
 // สำรองข้อมูลทั้งหมด (รวมการตั้งค่า LINE และผู้รับ) — ไฟล์มีรหัสลับ ควรเก็บเป็นความลับ
 app.get('/api/export', (req, res) => {
-  const { settings, rooms, classes, recipients } = store.db;
-  res.attachment('timetable-backup.json').json({ version: 2, exportedAt: new Date().toISOString(), settings, rooms, classes, recipients });
+  const { settings, rooms, classes, recipients, groups, specialDays } = store.db;
+  res.attachment('timetable-backup.json').json({ version: 3, exportedAt: new Date().toISOString(), settings, groups, specialDays, rooms, classes, recipients });
 });
 app.post('/api/import', (req, res) => {
-  const { rooms, classes, settings, recipients } = req.body || {};
+  const { rooms, classes, settings, recipients, groups, specialDays } = req.body || {};
   if (!Array.isArray(rooms) || !Array.isArray(classes)) return res.status(400).json({ error: 'ไฟล์ไม่ถูกต้อง' });
   const db = store.db;
-  const prev = { rooms: db.rooms, classes: db.classes, settings: db.settings, recipients: db.recipients };
+  const prev = { rooms: db.rooms, classes: db.classes, settings: db.settings, recipients: db.recipients, groups: db.groups, specialDays: db.specialDays };
   try {
+    if (Array.isArray(groups)) { db.groups = []; for (const g of groups) db.groups.push({ id: String(g.id || store.uid()), ...cleanGroup(g) }); sortGroups(); }
+    if (Array.isArray(specialDays)) db.specialDays = specialDays.map((x) => ({ id: String(x.id || store.uid()), ...cleanSpecial(x) }));
     db.rooms = rooms.map((r) => ({ id: String(r.id || store.uid()), ...cleanRoom(r) }));
     db.classes = classes.map((c) => ({ id: String(c.id || store.uid()), ...cleanClass(c) }));
     if (settings && typeof settings === 'object') {
@@ -470,6 +646,7 @@ app.post('/api/import', (req, res) => {
         ...db.settings, ...keep,
         line: { ...db.settings.line, ...(settings.line || {}) },
         ai: { ...(db.settings.ai || {}), ...(settings.ai || {}) },
+        richMenu: db.settings.richMenu,
         // ฟอนต์ที่อัปโหลดไม่ได้อยู่ในไฟล์สำรอง จึงคงฟอนต์ปัจจุบันไว้ ยกเว้น Google Font
         font: settings.font && settings.font.source !== 'custom' ? { ...db.settings.font, ...settings.font } : db.settings.font,
       };
@@ -477,11 +654,12 @@ app.post('/api/import', (req, res) => {
     if (Array.isArray(recipients)) {
       db.recipients = recipients
         .filter((r) => r && /^[UCR][0-9a-f]{32}$/.test(r.id))
-        .map((r) => ({ id: r.id, type: { U: 'user', C: 'group', R: 'room' }[r.id[0]], name: String(r.name || '').slice(0, 80), enabled: r.enabled !== false, left: !!r.left, addedAt: r.addedAt || new Date().toISOString() }));
+        .map((r) => ({ id: r.id, type: { U: 'user', C: 'group', R: 'room' }[r.id[0]], name: String(r.name || '').slice(0, 80), enabled: r.enabled !== false, left: !!r.left, groupId: r.groupId && db.groups.some((g) => g.id === r.groupId) ? r.groupId : null, addedAt: r.addedAt || new Date().toISOString() }));
     }
     db.sent = {};
+    markDirty();
     store.save();
-    res.json({ ok: true, rooms: db.rooms.length, classes: db.classes.length, recipients: db.recipients.length, settings: !!settings });
+    res.json({ ok: true, groups: db.groups.length, specialDays: db.specialDays.length, rooms: db.rooms.length, classes: db.classes.length, recipients: db.recipients.length, settings: !!settings });
   } catch (e) {
     Object.assign(db, prev);
     res.status(400).json({ error: e.message });
@@ -518,4 +696,5 @@ if (require.main === module) {
   process.on('SIGTERM', shutdown);
 }
 
+app.locals.keywordReply = keywordReply; // สำหรับทดสอบ
 module.exports = app;
