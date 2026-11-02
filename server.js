@@ -155,6 +155,7 @@ app.get('/api/state', (req, res) => {
     settings: maskedSettings(db.settings),
     rooms: db.rooms, classes: db.classes, recipients: db.recipients, fonts: db.fonts,
     history: db.history.slice(0, 30),
+    storage: store.usingPostgres ? 'postgres' : 'file',
     now,
     webhookUrl: publicUrl(req) + '/webhook/line',
   });
@@ -449,24 +450,42 @@ app.post('/api/vision/commit', (req, res) => {
 });
 
 // ---------- Backup ----------
+// สำรองข้อมูลทั้งหมด (รวมการตั้งค่า LINE และผู้รับ) — ไฟล์มีรหัสลับ ควรเก็บเป็นความลับ
 app.get('/api/export', (req, res) => {
-  const { rooms, classes } = store.db;
-  res.attachment('timetable-backup.json').json({ version: 1, rooms, classes });
+  const { settings, rooms, classes, recipients } = store.db;
+  res.attachment('timetable-backup.json').json({ version: 2, exportedAt: new Date().toISOString(), settings, rooms, classes, recipients });
 });
 app.post('/api/import', (req, res) => {
-  const { rooms, classes } = req.body || {};
+  const { rooms, classes, settings, recipients } = req.body || {};
   if (!Array.isArray(rooms) || !Array.isArray(classes)) return res.status(400).json({ error: 'ไฟล์ไม่ถูกต้อง' });
+  const db = store.db;
+  const prev = { rooms: db.rooms, classes: db.classes, settings: db.settings, recipients: db.recipients };
   try {
-    const db = store.db;
-    const prevRooms = db.rooms;
     db.rooms = rooms.map((r) => ({ id: String(r.id || store.uid()), ...cleanRoom(r) }));
-    try {
-      db.classes = classes.map((c) => ({ id: String(c.id || store.uid()), ...cleanClass(c) }));
-    } catch (e) { db.rooms = prevRooms; throw e; }
+    db.classes = classes.map((c) => ({ id: String(c.id || store.uid()), ...cleanClass(c) }));
+    if (settings && typeof settings === 'object') {
+      const keep = pick(settings, ['appName', 'schoolName', 'contactEmail', 'timezone', 'defaultReminderMinutes', 'remindersEnabled', 'visibleDays', 'dayStart', 'dayEnd', 'accentColor']);
+      if (keep.timezone && !isValidTimeZone(keep.timezone)) delete keep.timezone;
+      db.settings = {
+        ...db.settings, ...keep,
+        line: { ...db.settings.line, ...(settings.line || {}) },
+        ai: { ...(db.settings.ai || {}), ...(settings.ai || {}) },
+        // ฟอนต์ที่อัปโหลดไม่ได้อยู่ในไฟล์สำรอง จึงคงฟอนต์ปัจจุบันไว้ ยกเว้น Google Font
+        font: settings.font && settings.font.source !== 'custom' ? { ...db.settings.font, ...settings.font } : db.settings.font,
+      };
+    }
+    if (Array.isArray(recipients)) {
+      db.recipients = recipients
+        .filter((r) => r && /^[UCR][0-9a-f]{32}$/.test(r.id))
+        .map((r) => ({ id: r.id, type: { U: 'user', C: 'group', R: 'room' }[r.id[0]], name: String(r.name || '').slice(0, 80), enabled: r.enabled !== false, left: !!r.left, addedAt: r.addedAt || new Date().toISOString() }));
+    }
     db.sent = {};
     store.save();
-    res.json({ ok: true, rooms: db.rooms.length, classes: db.classes.length });
-  } catch (e) { res.status(400).json({ error: e.message }); }
+    res.json({ ok: true, rooms: db.rooms.length, classes: db.classes.length, recipients: db.recipients.length, settings: !!settings });
+  } catch (e) {
+    Object.assign(db, prev);
+    res.status(400).json({ error: e.message });
+  }
 });
 
 app.use('/api', (req, res) => res.status(404).json({ error: 'ไม่พบ API' }));

@@ -111,6 +111,7 @@
       { ok: S.settings.remindersEnabled, t: 'แจ้งเตือนอัตโนมัติ', d: S.settings.remindersEnabled ? `เปิดอยู่ · ค่าเริ่มต้น ${S.settings.defaultReminderMinutes} นาทีก่อนเริ่ม` : 'ปิดอยู่', link: '#settings' },
       { ok: S.rooms.length > 0 && S.rooms.every((r) => r.lat != null || r.mapUrl), t: 'ตำแหน่งห้องเรียน', d: `${S.rooms.filter((r) => r.lat != null || r.mapUrl).length}/${S.rooms.length} ห้องปักหมุดแล้ว`, link: '#rooms' },
       { ok: S.classes.length > 0, t: 'ตารางสอน', d: `${S.classes.length} คาบต่อสัปดาห์`, link: '#timetable' },
+      { ok: S.storage === 'postgres', t: 'การบันทึกข้อมูล', d: S.storage === 'postgres' ? 'ถาวร (ฐานข้อมูล) ข้อมูลไม่หายเมื่ออัปเดต' : 'ชั่วคราว ข้อมูลจะหายเมื่อรีสตาร์ต ให้ส่งออกสำรองไว้', link: '#settings' },
     ];
     $('#status-list').innerHTML = status.map((s) => `<div class="status"><i class="dot ${s.ok ? 'ok' : 'warn'}"></i><div><b>${s.t}</b><span>${esc(s.d)}</span></div><a href="${s.link}">จัดการ ›</a></div>`).join('');
 
@@ -395,6 +396,7 @@
     swatches($('#accent-swatches'), s.accentColor, (c) => document.documentElement.style.setProperty('--accent', c));
     renderFonts();
     renderAi();
+    $('#storage-note').innerHTML = S.storage === 'postgres' ? '✅ ข้อมูลบันทึกถาวรในฐานข้อมูลแล้ว' : '⚠️ ตอนนี้บันทึกแบบชั่วคราว ข้อมูลจะหายเมื่อเซิร์ฟเวอร์รีสตาร์ต';
   }
 
   function renderFonts() {
@@ -694,10 +696,10 @@
   };
   $('#import-file').onchange = async (e) => {
     const file = e.target.files[0]; if (!file) return;
-    if (!confirm('การนำเข้าจะแทนที่ตารางสอนและห้องเรียนทั้งหมด ดำเนินการต่อ?')) return (e.target.value = '');
+    if (!confirm('การนำเข้าจะแทนที่ข้อมูลปัจจุบันด้วยข้อมูลในไฟล์ (ตาราง ห้อง และถ้ามีในไฟล์: ผู้รับ การตั้งค่า) ดำเนินการต่อ?')) return (e.target.value = '');
     try {
       const r = await api('/api/import', { method: 'POST', body: JSON.parse(await file.text()) });
-      toast(`นำเข้าแล้ว: ${r.rooms} ห้อง, ${r.classes} คาบ`, 'ok');
+      toast(`นำเข้าแล้ว: ${r.rooms} ห้อง, ${r.classes} คาบ, ผู้รับ ${r.recipients} ราย${r.settings ? ' และการตั้งค่า' : ''}`, 'ok');
       refresh();
     } catch (er) { toast(er.message, 'err'); }
     e.target.value = '';
