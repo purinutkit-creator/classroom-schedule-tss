@@ -81,6 +81,8 @@ async function handleEvent(ev) {
 
 // ---------- ทั่วไป ----------
 app.use(express.json({ limit: '1mb' }));
+// health check (ใช้กับ Render และบริการปลุกเซิร์ฟเวอร์)
+app.get('/healthz', (req, res) => res.json({ ok: true, storage: store.usingPostgres ? 'postgres' : 'file', time: new Date().toISOString() }));
 app.use(express.static(path.join(__dirname, 'public'), { extensions: ['html'] }));
 app.use('/vendor/leaflet', express.static(path.join(__dirname, 'node_modules', 'leaflet', 'dist'), { maxAge: '7d' }));
 app.use('/fonts', express.static(store.FONT_DIR, { maxAge: '30d', immutable: true }));
@@ -327,13 +329,17 @@ const upload = multer({
   fileFilter: (req, file, cb) => cb(FONT_EXT[path.extname(file.originalname).toLowerCase()] ? null : new Error('รองรับเฉพาะไฟล์ .ttf .otf .woff .woff2'), true),
 });
 app.post('/api/fonts', (req, res) => {
-  upload.single('file')(req, res, (err) => {
+  upload.single('file')(req, res, async (err) => {
     if (err) return res.status(400).json({ error: err.code === 'LIMIT_FILE_SIZE' ? 'ไฟล์ใหญ่เกิน 15MB' : err.message });
     if (!req.file) return res.status(400).json({ error: 'กรุณาเลือกไฟล์ฟอนต์' });
     const ext = path.extname(req.file.filename);
     const family = (String(req.body.family || '').trim() || path.basename(req.file.originalname, path.extname(req.file.originalname)))
       .replace(/['"\\<>;{}]/g, '').slice(0, 60);
     const font = { id: store.uid(), family, file: req.file.filename, format: FONT_EXT[ext], originalName: req.file.originalname, size: req.file.size, addedAt: new Date().toISOString() };
+    try { await store.persistFont(font.file); } catch (e) {
+      fs.rm(req.file.path, { force: true }, () => {});
+      return res.status(500).json({ error: 'บันทึกฟอนต์ไม่สำเร็จ: ' + e.message });
+    }
     store.db.fonts.push(font); store.save();
     res.status(201).json(font);
   });
@@ -343,7 +349,7 @@ app.delete('/api/fonts/:id', (req, res) => {
   const font = db.fonts.find((f) => f.id === req.params.id);
   if (!font) return res.status(404).json({ error: 'ไม่พบฟอนต์' });
   db.fonts = db.fonts.filter((f) => f.id !== font.id);
-  fs.rm(path.join(store.FONT_DIR, font.file), { force: true }, () => {});
+  store.removeFont(font.file).catch((e) => console.error('[fonts]', e.message));
   if (db.settings.font.customFontId === font.id) db.settings.font = { ...db.settings.font, source: 'google', customFontId: null };
   store.save(); res.json({ ok: true });
 });
@@ -371,12 +377,30 @@ app.post('/api/import', (req, res) => {
 
 app.use('/api', (req, res) => res.status(404).json({ error: 'ไม่พบ API' }));
 
+// Render free plan จะหลับเมื่อไม่มีคนเข้า 15 นาที ซึ่งทำให้แจ้งเตือนไม่ทำงาน
+// จึงปิงตัวเองผ่าน URL สาธารณะทุก 10 นาที (ปิดได้ด้วย KEEP_ALIVE=false)
+function startKeepAlive() {
+  const base = process.env.KEEP_ALIVE_URL || process.env.RENDER_EXTERNAL_URL;
+  if (!base || process.env.KEEP_ALIVE === 'false') return;
+  const url = base.replace(/\/$/, '') + '/healthz';
+  setInterval(() => {
+    fetch(url, { signal: AbortSignal.timeout(20000) }).catch((e) => console.warn('[keep-alive]', e.message));
+  }, 10 * 60 * 1000).unref();
+  console.log(`[keep-alive] ปิง ${url} ทุก 10 นาที`);
+}
+
 if (require.main === module) {
-  app.listen(PORT, () => {
-    console.log(`📚 ตารางสอนพร้อมใช้งานที่ http://localhost:${PORT}`);
-    scheduler.start();
+  store.init().then(() => {
+    app.listen(PORT, () => {
+      console.log(`📚 ตารางสอนพร้อมใช้งานที่ http://localhost:${PORT}`);
+      scheduler.start();
+      startKeepAlive();
+    });
+  }).catch((e) => {
+    console.error('เริ่มระบบไม่สำเร็จ (เชื่อมต่อฐานข้อมูลไม่ได้?):', e.message);
+    process.exit(1);
   });
-  const shutdown = () => { store.flush(); process.exit(0); };
+  const shutdown = () => { store.close().finally(() => process.exit(0)); };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
 }

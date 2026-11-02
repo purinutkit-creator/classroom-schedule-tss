@@ -1,20 +1,27 @@
+# Render Blueprint — ใช้ได้กับแพ็กเกจฟรี
+# ข้อมูลเก็บใน Postgres เพราะ Web Service ฟรีไม่มีดิสก์ถาวร
 services:
   - type: web
     name: classroom-schedule
     runtime: node
-    plan: starter
+    plan: free
+    region: singapore
     buildCommand: npm ci --omit=dev
     startCommand: npm start
+    healthCheckPath: /healthz
     envVars:
-      - key: DATA_DIR
-        value: /var/data
+      - key: DATABASE_URL
+        fromDatabase:
+          name: classroom-schedule-db
+          property: connectionString
       - key: ADMIN_PASSWORD
-        sync: false
+        generateValue: true
       - key: LINE_CHANNEL_ACCESS_TOKEN
         sync: false
       - key: LINE_CHANNEL_SECRET
         sync: false
-    disk:
-      name: data
-      mountPath: /var/data
-      sizeGB: 1
+
+databases:
+  - name: classroom-schedule-db
+    plan: free
+    region: singapore

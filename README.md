@@ -34,6 +34,7 @@ npm start          # เปิด http://localhost:3000
 | `DATA_DIR` | โฟลเดอร์เก็บข้อมูลและฟอนต์ที่อัปโหลด |
 | `ADMIN_PASSWORD` | ตั้งเพื่อล็อกหน้าแอดมินด้วยรหัสผ่าน (**ควรตั้งเมื่อนำขึ้นอินเทอร์เน็ต**) |
 | `LINE_CHANNEL_ACCESS_TOKEN`, `LINE_CHANNEL_SECRET` | ใส่ที่นี่หรือในหน้า LINE OA ของเว็บก็ได้ |
+| `DATABASE_URL` | PostgreSQL connection string (ถ้าตั้งจะใช้ Postgres แทนไฟล์) |
 | `PUBLIC_URL` | URL สาธารณะ ใช้แสดง Webhook URL ที่ถูกต้องเมื่ออยู่หลัง proxy |
 
 > โหลด `.env` ด้วย `node --env-file=.env server.js` (Node 20.6+) หรือกำหนดตัวแปรผ่านแพลตฟอร์มที่ deploy
@@ -64,9 +65,21 @@ npm start          # เปิด http://localhost:3000
 
 ## ☁️ Deploy
 
-เซิร์ฟเวอร์ต้องทำงานตลอดเวลาเพื่อให้ส่งแจ้งเตือนได้ตรงเวลา และต้องมี **ดิสก์ถาวร** สำหรับ `DATA_DIR`
+เซิร์ฟเวอร์ต้องทำงานตลอดเวลาเพื่อให้ส่งแจ้งเตือนได้ตรงเวลา และต้องเก็บข้อมูลไว้ถาวร ระบบรองรับ 2 แบบ:
+- ถ้ากำหนด `DATABASE_URL` จะเก็บข้อมูลและฟอนต์ที่อัปโหลดใน **PostgreSQL**
+- ถ้าไม่กำหนด จะเก็บเป็นไฟล์ใน `DATA_DIR`
 
-- **Render**: ใช้ `render.yaml` ที่เตรียมไว้ (Web Service + Persistent Disk) และตั้ง `ADMIN_PASSWORD`
+### Render (แพ็กเกจฟรี)
+
+`render.yaml` ตั้งค่าไว้สำหรับแพ็กเกจฟรีแล้ว ได้แก่ Web Service ฟรี + Postgres ฟรี ที่ region สิงคโปร์ และสุ่ม `ADMIN_PASSWORD` ให้อัตโนมัติ
+
+ข้อจำกัดของแพ็กเกจฟรีที่ระบบรองรับไว้แล้ว:
+- **Web Service หลับเมื่อไม่มีคนเข้า 15 นาที** ทำให้แจ้งเตือนหยุด ระบบจึงปิงตัวเองทุก 10 นาทีผ่าน `RENDER_EXTERNAL_URL` (ปิดได้ด้วย `KEEP_ALIVE=false`) เพื่อความชัวร์แนะนำให้ตั้ง [UptimeRobot](https://uptimerobot.com) หรือ [cron-job.org](https://cron-job.org) ให้เรียก `https://<ชื่อแอป>.onrender.com/healthz` ทุก 5 นาทีด้วย ซึ่งจะช่วยปลุกระบบกลับมาหลัง restart
+- **ไม่มีดิสก์ถาวร** ระบบจึงใช้ Postgres แทน
+- **Postgres ฟรีของ Render หมดอายุใน 30 วัน** ก่อนหมดอายุให้อัปเกรด หรือย้ายไปใช้ Postgres ฟรีที่ไม่หมดอายุ เช่น [Neon](https://neon.tech) หรือ [Supabase](https://supabase.com) โดยกด “ส่งออก” ข้อมูลในหน้าตั้งค่า แล้วเปลี่ยน `DATABASE_URL` เป็นของที่ใหม่ จากนั้นกด “นำเข้า” ข้อมูลกลับเข้าไป (ต้องตั้งค่า LINE และฟอนต์ใหม่)
+- Web Service ฟรีใช้ได้ 750 ชั่วโมงต่อเดือน ซึ่งพอสำหรับ 1 แอปที่เปิดตลอดเดือน
+
+### ที่อื่น ๆ
 - **VPS / เครื่องในโรงเรียน**: `npm ci --omit=dev && npm start` ร่วมกับ pm2 หรือ systemd แล้วใช้ Caddy, Nginx หรือ Cloudflare Tunnel เพื่อให้ได้ HTTPS
 - **ทดสอบบนเครื่อง**: ใช้ `ngrok http 3000` เพื่อให้ได้ HTTPS URL สำหรับ webhook
 
@@ -84,7 +97,7 @@ npm test
 
 ```
 server.js          API, webhook, เสิร์ฟหน้าเว็บ และ theme.css (ฟอนต์)
-src/store.js       เก็บข้อมูลเป็น JSON
+src/store.js       เก็บข้อมูล (ไฟล์ JSON หรือ PostgreSQL)
 src/scheduler.js   ตัวจับเวลาแจ้งเตือน
 src/line.js        LINE Messaging API และตัวสร้าง Flex Message
 src/time.js        คำนวณเวลาตามโซนเวลา
