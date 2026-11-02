@@ -98,13 +98,28 @@ function pgPool() {
     const local = /@(localhost|127\.0\.0\.1)[:/]/.test(DATABASE_URL);
     // Render internal URL ไม่ใช้ SSL ส่วน external URL ต้องใช้ SSL
     const internal = /@dpg-[^.]+(:\d+)?\//.test(DATABASE_URL);
-    pool = new Pool({ connectionString: DATABASE_URL, ssl: local || internal ? false : { rejectUnauthorized: false }, max: 3 });
+    // Neon / Postgres ภายนอกใช้ SSL; ฐานข้อมูลฟรีของ Neon จะหลับเมื่อไม่มีการใช้งาน จึงเผื่อเวลาให้ตื่น
+    pool = new Pool({
+      connectionString: DATABASE_URL,
+      ssl: local || internal ? false : { rejectUnauthorized: false },
+      max: 3,
+      connectionTimeoutMillis: 15000,
+      idleTimeoutMillis: 60000,
+    });
     pool.on('error', (e) => console.error('[store] postgres:', e.message));
   }
   return pool;
 }
 async function initPg() {
   const p = pgPool();
+  // ลองเชื่อมต่อซ้ำ เผื่อฐานข้อมูลกำลังตื่นจากโหมดพัก
+  for (let i = 1; ; i++) {
+    try { await p.query('SELECT 1'); break; } catch (e) {
+      if (i >= 5) throw e;
+      console.warn(`[store] เชื่อมต่อ Postgres ไม่สำเร็จ (ครั้งที่ ${i}): ${e.message} — ลองใหม่`);
+      await new Promise((r) => setTimeout(r, 2000 * i));
+    }
+  }
   await p.query(`CREATE TABLE IF NOT EXISTS app_state (id int PRIMARY KEY, data jsonb NOT NULL, updated_at timestamptz NOT NULL DEFAULT now())`);
   await p.query(`CREATE TABLE IF NOT EXISTS font_files (file text PRIMARY KEY, data bytea NOT NULL)`);
   const { rows } = await p.query('SELECT data FROM app_state WHERE id = 1');
