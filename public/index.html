@@ -30,7 +30,7 @@
       <div class="brand">
         <div class="brand-logo">📚</div>
         <div>
-          <div class="brand-name"><span data-bind="appName">ตารางสอน</span> <span class="ver">v3.1</span></div>
+          <div class="brand-name"><span data-bind="appName">ตารางสอน</span> <span class="ver">v3.2</span></div>
           <div class="brand-sub" data-bind="schoolName">Classroom Schedule</div>
         </div>
       </div>
@@ -234,6 +234,13 @@
             </div>
             <div class="card">
               <div class="card-head"><h3>6. รายละเอียด</h3></div>
+              <div class="field-label">รหัสสมาชิกบนริชเมนูของแต่ละคน</div>
+              <div class="seg full" id="d-membercode">
+                <button type="button" data-mc="all">ทุกคน</button>
+                <button type="button" data-mc="unassigned">เฉพาะคนที่ยังไม่เข้าห้อง</button>
+                <button type="button" data-mc="off">ไม่แสดง</button>
+              </div>
+              <p class="muted small">ระบบสร้างริชเมนูส่วนตัวที่มีรหัส 6 หลักของแต่ละคนอยู่ทางขวาของแถบด้านบน LINE ให้มีริชเมนูได้ไม่เกิน 1,000 ชุดต่อบัญชี จึงทำเมนูส่วนตัวได้ราว 950 คน ถ้าเกิน คนที่ยังไม่เข้าห้องจะได้ก่อน</p>
               <label>ความโค้งของมุม <span id="d-radius-val"></span><input type="range" min="0" max="90" step="2" id="d-radius" /></label>
               <label class="switch-row"><span>แสดงข้อความหัวเมนู</span><input type="checkbox" class="switch" data-opt="showTitle" /></label>
               <label class="switch-row"><span>แสดงปฏิทินเล็ก</span><input type="checkbox" class="switch" data-opt="showCalendar" /></label>
@@ -252,6 +259,7 @@
                 <select id="rm-group" class="group-select"></select>
                 <input type="date" id="rm-date" class="date-in" />
                 <button type="button" class="btn sm" id="rm-tomorrow">ดูพรุ่งนี้</button>
+                <label class="chk"><input type="checkbox" id="rm-withcode" checked /> แสดงตัวอย่างรหัส</label>
               </div>
               <div class="rm-preview"><img id="rm-img" alt="ตัวอย่างริชเมนู" /><div id="rm-loading" class="muted small">กำลังสร้างตัวอย่าง…</div></div>
               <p class="muted small" id="rm-meta"></p>

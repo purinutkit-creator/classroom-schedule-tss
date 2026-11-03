@@ -127,3 +127,52 @@ test('ฟอนต์ที่อัปโหลดเป็น woff2 ใช้�
   assert.match(img.warning, /\.ttf/);
   assert.ok(img.data.length > 1000);
 });
+
+test('ริชเมนูส่วนตัว: มีรหัสสมาชิกของแต่ละคน ผูกรายคน และไม่ถูก bulk link ทับ', async (t) => {
+  const db = mkDb();
+  db.recipients = [
+    { id: 'U' + '1'.repeat(32), type: 'user', code: '111111', groupId: 'g1', enabled: true },
+    { id: 'U' + '2'.repeat(32), type: 'user', code: '222222', enabled: true },
+    { id: 'U' + '3'.repeat(32), type: 'user', code: '333333', groupId: 'g1', left: true },
+    { id: 'C' + '4'.repeat(32), type: 'group', code: '444444', groupId: 'g1', enabled: true },
+  ];
+  db.settings.richMenu.personal = { ['U' + '2'.repeat(32)]: 'oldP' };
+  let n = 0;
+  const made = [], linkedOne = [], bulk = [], removed = [];
+  t.mock.method(line.richMenu, 'create', async (s, m) => { made.push(m.name); return { richMenuId: `rm${++n}` }; });
+  t.mock.method(line.richMenu, 'upload', async () => {});
+  t.mock.method(line.richMenu, 'setDefault', async () => {});
+  t.mock.method(line.richMenu, 'bulkLink', async (s, id, users) => { bulk.push(...users); });
+  t.mock.method(line.richMenu, 'linkUser', async (s, uid, id) => { linkedOne.push([uid, id]); });
+  t.mock.method(line.richMenu, 'remove', async (s, id) => { removed.push(id); });
+  const r = await richmenu.rebuild(db);
+  assert.equal(r.personal, 2);
+  assert.deepEqual(bulk, [], 'คนที่มีเมนูส่วนตัวไม่ถูกผูกแบบกลุ่ม');
+  assert.deepEqual(linkedOne.map((x) => x[0]).sort(), ['U' + '1'.repeat(32), 'U' + '2'.repeat(32)]);
+  assert.ok(made.some((m) => /#111111/.test(m)) && made.some((m) => /#222222/.test(m)));
+  assert.ok(removed.includes('oldP'));
+  // เฉพาะคนที่ยังไม่เข้าห้อง
+  db.settings.richMenu.design = { memberCode: 'unassigned' };
+  assert.deepEqual(richmenu.personalTargets(db).users.map((x) => x.code), ['222222']);
+  db.settings.richMenu.design = { memberCode: 'off' };
+  assert.equal(richmenu.personalTargets(db).users.length, 0);
+});
+
+test('ริชเมนูส่วนตัว: จำกัดจำนวนตามเพดานของ LINE และให้คนที่ยังไม่เข้าห้องก่อน', () => {
+  const db = mkDb();
+  db.recipients = [];
+  for (let i = 0; i < 1000; i++) db.recipients.push({ id: `U${String(i).padStart(32, '0')}`, type: 'user', code: String(100000 + i), groupId: i < 900 ? 'g1' : null });
+  const { users, skipped } = richmenu.personalTargets(db);
+  assert.equal(users.length, richmenu.MAX_MENUS - 2);
+  assert.equal(skipped, 1000 - users.length);
+  assert.ok(users.slice(0, 100).every((r) => !r.groupId), 'คนที่ยังไม่เข้าห้องได้ก่อน');
+});
+
+test('รหัสสมาชิกแสดงบนแถบด้านบนของเมนู', () => {
+  const db = mkDb();
+  const svg = richmenu.buildSvg(db, null, '2026-11-17', null, 'Prompt', { code: '482913' });
+  assert.match(svg, /รหัสสมาชิก/);
+  assert.match(svg, /letter-spacing="[0-9.]+">482913</);
+  assert.match(svg, /รหัส 482913/, 'ปุ่มรหัสสมาชิกแสดงรหัสด้วย');
+  assert.doesNotMatch(richmenu.buildSvg(db, null, "2026-11-17"), />482913</);
+});

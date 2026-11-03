@@ -1193,7 +1193,7 @@
     if (!$('#rm-date').value) $('#rm-date').value = S.todayKey;
     $('#rm-status').innerHTML = !rm.enabled ? '<span class="muted">เปิดใช้งานเพื่อให้ระบบสร้างริชเมนูอัตโนมัติทุกวัน</span>'
       : rm.lastError ? `⚠️ <b>สร้างไม่สำเร็จ:</b> ${esc(rm.lastError)} <span class="muted">(ระบบจะลองใหม่อัตโนมัติ)</span>`
-      : rm.builtAt ? `✅ อัปเดตล่าสุด ${new Date(rm.builtAt).toLocaleString('th-TH', { timeZone: S.settings.timezone, dateStyle: 'medium', timeStyle: 'short' })} · ${Object.keys(rm.menus || {}).length} เมนู · ผูกผู้ใช้ ${rm.linked || 0} คน`
+      : rm.builtAt ? `✅ อัปเดตล่าสุด ${new Date(rm.builtAt).toLocaleString('th-TH', { timeZone: S.settings.timezone, dateStyle: 'medium', timeStyle: 'short' })} · เมนูห้อง ${Object.keys(rm.menus || {}).length} ชุด · เมนูส่วนตัว (มีรหัส) ${rm.personalCount || 0} คน${rm.personalSkipped ? ` · เกินเพดาน ${rm.personalSkipped} คน` : ''}${rm.personalFailed ? ` · ⚠️ สร้างไม่สำเร็จ ${rm.personalFailed} คน` : ''}`
       : 'กำลังรอสร้างเมนูแรก…';
   }
   let rmUrl = null, rmSeq = 0;
@@ -1201,7 +1201,9 @@
     const seq = ++rmSeq;
     $('#rm-loading').classList.remove('hidden');
     try {
-      const body = { group: $('#rm-group').value, date: $('#rm-date').value || S.todayKey, design: D || undefined };
+      const mc = D?.memberCode || 'all';
+      const sample = mc !== 'off' && $('#rm-withcode').checked && (mc === 'all' || !$('#rm-group').value);
+      const body = { group: $('#rm-group').value, date: $('#rm-date').value || S.todayKey, design: D || undefined, code: sample ? '482913' : undefined };
       const res = await fetch('/api/richmenu/preview', { method: 'POST', headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify(body) });
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'สร้างตัวอย่างไม่ได้');
       const blob = await res.blob();
@@ -1229,7 +1231,7 @@
   $('#rm-selected').onchange = (e) => saveRichMenu({ selected: e.target.checked }, 'บันทึกแล้ว (มีผลกับเมนูรอบถัดไป)');
   $('#rm-rebuild').onclick = () => busy($('#rm-rebuild'), async () => {
     const r = await api('/api/richmenu/rebuild', { method: 'POST' });
-    toast(`อัปเดตริชเมนู ${r.menus} ชุดแล้ว · ผูกผู้ใช้ ${r.linked} คน ✨`, 'ok');
+    toast(`อัปเดตริชเมนูแล้ว · เมนูห้อง ${r.menus} ชุด · เมนูส่วนตัว ${r.personal || 0} คน ✨`, 'ok');
     await refresh();
   });
 
@@ -1295,6 +1297,7 @@
     $('#d-overlay').value = D.bgOverlay; $('#d-overlay-val').textContent = `${Math.round(D.bgOverlay * 100)}%`;
     $('#d-radius').value = D.radius; $('#d-radius-val').textContent = `${D.radius}px`;
     $$('#design-form [data-opt]').forEach((x) => { x.checked = !!D[x.dataset.opt]; });
+    $$('#d-membercode button').forEach((b) => b.classList.toggle('active', b.dataset.mc === (D.memberCode || 'all')));
     $$('#d-fontsrc button').forEach((b) => b.classList.toggle('active', b.dataset.src === D.font.source));
     $('#d-font-google').classList.toggle('hidden', D.font.source !== 'google');
     $('#d-font-custom').classList.toggle('hidden', D.font.source !== 'custom');
@@ -1346,6 +1349,8 @@
     if (slots < 6 && !D.buttons.some((x) => x.action === 'me' || x.action === 'code')) D.buttons[slots - 1] = { action: 'me', label: '', sub: '', url: '' };
     designChanged(true);
   };
+  $('#d-membercode').onclick = (e) => { const b = e.target.closest('[data-mc]'); if (b) { D.memberCode = b.dataset.mc; designChanged(true); } };
+  $('#rm-withcode').onchange = () => loadRichMenuPreview();
   $('#d-colormode').onclick = (e) => { const b = e.target.closest('[data-mode]'); if (b) { D.colorMode = b.dataset.mode; designChanged(true); } };
   $('#d-presets').onclick = (e) => { const b = e.target.closest('[data-preset]'); if (b) { D.colors = { ...D_PRESETS[+b.dataset.preset] }; designChanged(true); } };
   $('#d-colors').addEventListener('input', (e) => { const k = e.target.dataset.color; if (k) { D.colors[k] = e.target.value; designChanged(); } });
@@ -1390,7 +1395,7 @@
   });
   $('#d-reset').onclick = () => {
     if (!confirm('คืนค่าการออกแบบเป็นค่าเริ่มต้น? (ยังไม่บันทึกจนกว่าจะกด “บันทึกการออกแบบ”)')) return;
-    D = { layout: 'grid6', colorMode: 'day', colors: { ...D_PRESETS[0] }, font: { source: 'bundled', family: 'Prompt', customFontId: null }, title: '', logoFile: null, bgFile: null, bgOverlay: 0.45, radius: 44, showTitle: true, showCalendar: true, showGroup: true, showStrip: true, showIcons: true, buttons: ['today', 'tomorrow', 'next', 'week', 'holiday', 'me'].map((a) => ({ action: a, label: '', sub: '', url: '' })) };
+    D = { layout: 'grid6', colorMode: 'day', colors: { ...D_PRESETS[0] }, font: { source: 'bundled', family: 'Prompt', customFontId: null }, title: '', logoFile: null, bgFile: null, bgOverlay: 0.45, radius: 44, showTitle: true, showCalendar: true, showGroup: true, showStrip: true, showIcons: true, memberCode: 'all', buttons: ['today', 'tomorrow', 'next', 'week', 'holiday', 'me'].map((a) => ({ action: a, label: '', sub: '', url: '' })) };
     designChanged(true);
   };
 

@@ -51,6 +51,7 @@ const DEFAULT_DESIGN = () => ({
   showGroup: true,
   showStrip: true,
   showIcons: true,
+  memberCode: 'all',
   buttons: [
     { action: 'today', label: '' }, { action: 'tomorrow', label: '' }, { action: 'next', label: '' },
     { action: 'week', label: '' }, { action: 'holiday', label: '' }, { action: 'me', label: '' },
@@ -96,6 +97,8 @@ function normalizeDesign(input) {
     showGroup: x.showGroup !== false,
     showStrip: x.showStrip !== false,
     showIcons: x.showIcons !== false,
+    // รหัสสมาชิกบนริชเมนูของแต่ละคน: all = ทุกคน, unassigned = เฉพาะคนที่ยังไม่เข้าห้อง, off = ไม่แสดง
+    memberCode: ['all', 'unassigned', 'off'].includes(x.memberCode) ? x.memberCode : 'all',
     buttons,
   };
 }
@@ -125,6 +128,20 @@ function luminance(hex) {
 function shortDate(key) {
   const d = cal.parseKey(key);
   return `${d.getUTCDate()} ${cal.MONTHS_SHORT[d.getUTCMonth()]}`;
+}
+
+/** ป้ายรหัสสมาชิก: คืน { svg, w } — ป้ายชิดขวาที่ตำแหน่ง right */
+function codePill(code, { right, y, h, bg, fg, short }) {
+  const lsz = h * 0.34, csz = h * 0.56, pad = h * 0.42, gap = h * 0.25, ls = csz * 0.14;
+  const label = short ? 'รหัส' : 'รหัสสมาชิก';
+  const lw = textWidth(label, lsz) * 1.08;
+  const dw = code.length * (csz * 0.6 + ls);
+  const w = pad + lw + gap + dw + pad * 0.8;
+  const x = right - w;
+  const svg = `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${h / 2}" fill="${bg}"/>`
+    + `<text x="${x + pad}" y="${y + h / 2 + lsz * 0.36}" font-size="${lsz}" font-weight="600" fill="${fg}" opacity="0.85">${label}</text>`
+    + `<text x="${x + pad + lw + gap}" y="${y + h / 2 + csz * 0.36}" font-size="${csz}" font-weight="700" fill="${fg}" letter-spacing="${ls}">${code}</text>`;
+  return { svg, w };
 }
 
 function icon(kind, cx, cy, color, k = 1) {
@@ -245,7 +262,7 @@ function stripMessage(db, i) {
   return { color: null, text: i.today.length ? `วันนี้มี ${i.today.length} คาบ · เริ่ม ${i.today[0].start} น. · เลิก ${i.today[i.today.length - 1].end} น.` : 'วันนี้ไม่มีคาบเรียน' };
 }
 
-function buttonText(b, i) {
+function buttonText(b, i, code) {
   const a = ACTIONS[b.action];
   const def = {
     today: i.specialToday && i.specialToday.suspendClasses !== false ? 'วันนี้หยุด' : i.today.length ? `${i.today.length} คาบ` : 'ไม่มีคาบเรียน',
@@ -253,8 +270,8 @@ function buttonText(b, i) {
     next: 'พร้อมปุ่มนำทาง',
     week: 'ดูทุกวัน',
     holiday: i.nextSpecial ? `${shortDate(i.nextSpecial.start)} ${i.nextSpecial.name}` : 'และวันกิจกรรม',
-    me: i.group ? i.group.name : 'แตะเพื่อดูรหัสสมาชิก',
-    code: 'แตะเพื่อดูรหัส 6 หลัก',
+    me: i.group ? i.group.name : code ? `รหัส ${code}` : 'แตะเพื่อดูรหัสสมาชิก',
+    code: code ? `รหัส ${code}` : 'แตะเพื่อดูรหัส 6 หลัก',
     link: b.url ? b.url.replace(/^https:\/\//, '').replace(/\/$/, '') : '',
   }[b.action];
   // เมนูของคนที่ยังไม่เข้าห้อง: ปุ่ม "ห้องของฉัน" แสดงเป็น "รหัสสมาชิก"
@@ -299,7 +316,8 @@ function themeColors(design, weekday) {
   return { header: bg, headerText: cal.DAY_TEXT[weekday], accent: weekday === 1 ? '#8a6d00' : bg, page: '#f3f4f8', button: '#ffffff', buttonText: '#1e2235', subText: '#6b7290' };
 }
 
-function buildSvg(db, groupId, todayKey, designIn, fontFamily = 'Prompt') {
+function buildSvg(db, groupId, todayKey, designIn, fontFamily = 'Prompt', opts = {}) {
+  const code = /^\d{6}$/.test(opts.code || '') ? opts.code : null;
   const design = normalizeDesign(designIn || db.settings.richMenu?.design);
   const i = menuInfo(db, groupId, todayKey);
   const g = geometry(design.layout);
@@ -351,6 +369,12 @@ function buildSvg(db, groupId, todayKey, designIn, fontFamily = 'Prompt') {
       out.push(`<text x="${gx + gw / 2}" y="${gy + 98 * k}" font-size="${gs}" font-weight="700" fill="${dark}" text-anchor="middle">${esc(fit(gname, gs, gw - 70 * k))}</text>`);
     }
   }
+  if (code && g.narrow) {
+    const ph = 140 * k;
+    const y = h.y + 560 * k + yShift;
+    const pill = codePill(code, { right: h.x + h.w - 60 * k, y: y + ph + 30 * k > h.y + h.h ? h.y + 60 * k : y, h: ph, bg: '#ffffff', fg: dark, short: true });
+    out.push(pill.svg);
+  }
   if (design.showCalendar && !g.narrow) {
     const cx = h.x + h.w - 510 * k, cy = h.y + 96 * k, cs = 390 * k, cr = Math.min(56 * k, R);
     out.push(`<rect x="${cx}" y="${cy}" width="${cs}" height="${cs}" rx="${cr}" fill="#ffffff"/>`);
@@ -362,12 +386,20 @@ function buildSvg(db, groupId, todayKey, designIn, fontFamily = 'Prompt') {
   // ---- แถบแจ้งเตือน ----
   const s = g.strip;
   const msg = stripMessage(db, i);
-  if (design.showStrip || msg.color) {
+  if (design.showStrip || msg.color || code) {
     const sb = msg.color || c.button, sf = msg.color ? '#ffffff' : c.buttonText;
     const fsz = Math.min(70, s.h * 0.47);
     out.push(`<rect x="${s.x}" y="${s.y}" width="${s.w}" height="${s.h}" fill="${sb}"/>`);
+    // รหัสสมาชิกของผู้ใช้คนนี้ (ด้านขวาของแถบ)
+    let reserve = 0;
+    if (code && !g.narrow) {
+      const ph = s.h * 0.72;
+      const pill = codePill(code, { right: s.x + s.w - 50, y: s.y + (s.h - ph) / 2, h: ph, bg: msg.color ? '#ffffff' : c.accent, fg: msg.color ? msg.color : (luminance(c.accent) > 0.6 ? '#1e2235' : '#ffffff') });
+      out.push(pill.svg);
+      reserve = pill.w + 70;
+    }
     out.push(`<circle cx="${s.x + 80 + fsz * 0.3}" cy="${s.y + s.h / 2}" r="${fsz * 0.37}" fill="${msg.color ? '#ffffff' : c.accent}"/>`);
-    out.push(`<text x="${s.x + 140 + fsz * 0.3}" y="${s.y + s.h / 2 + fsz * 0.37}" font-size="${fsz}" font-weight="600" fill="${sf}">${esc(fit(msg.text, fsz, s.w - 200 - fsz))}</text>`);
+    out.push(`<text x="${s.x + 140 + fsz * 0.3}" y="${s.y + s.h / 2 + fsz * 0.37}" font-size="${fsz}" font-weight="600" fill="${sf}">${esc(fit(msg.text, fsz, s.w - 200 - fsz - reserve))}</text>`);
   } else {
     out.push(`<rect x="${s.x}" y="${s.y}" width="${s.w}" height="${s.h}" fill="${c.page}"/>`);
   }
@@ -377,7 +409,7 @@ function buildSvg(db, groupId, todayKey, designIn, fontFamily = 'Prompt') {
   g.cells.forEach((cell, n) => {
     const b = design.buttons[n];
     if (!b) return;
-    const t = buttonText(b, i);
+    const t = buttonText(b, i, code);
     const kc = Math.min(cell.h / 434, cell.w / 788);
     out.push(`<rect x="${cell.x}" y="${cell.y}" width="${cell.w}" height="${cell.h}" rx="${Math.min(R, cell.h / 2)}" fill="${c.button}"/>`);
     const vertical = cell.w < cell.h * 1.25; // ปุ่มแคบ: ไอคอนบน ข้อความล่าง
@@ -418,14 +450,14 @@ function render(svg, fontFiles = BUNDLED) {
   throw new Error('รูปริชเมนูใหญ่เกิน 1MB แม้บีบอัดแล้ว ลองใช้รูปพื้นหลังที่เล็กลง');
 }
 
-async function renderMenu(db, groupId, key, designIn) {
+async function renderMenu(db, groupId, key, designIn, opts = {}) {
   const design = normalizeDesign(designIn || db.settings.richMenu?.design);
   const font = await resolveFont(db, design);
-  const out = render(buildSvg(db, groupId, key, design, font.family), font.files);
+  const out = render(buildSvg(db, groupId, key, design, font.family, opts), font.files);
   return { ...out, warning: font.warning || null };
 }
 
-function menuDefinition(db, groupId, todayKey, designIn) {
+function menuDefinition(db, groupId, todayKey, designIn, opts = {}) {
   const design = normalizeDesign(designIn || db.settings.richMenu?.design);
   const d = cal.parseKey(todayKey);
   const group = db.groups.find((x) => x.id === groupId);
@@ -446,7 +478,7 @@ function menuDefinition(db, groupId, todayKey, designIn) {
   return {
     size: { width: W, height: g.H },
     selected: db.settings.richMenu?.selected !== false,
-    name: `classroom ${todayKey} ${group ? group.name : 'default'}`.slice(0, 300),
+    name: `classroom ${todayKey} ${group ? group.name : 'default'}${opts.code ? ` #${opts.code}` : ''}`.slice(0, 300),
     chatBarText: `เมนู ${d.getUTCDate()} ${cal.MONTHS_SHORT[d.getUTCMonth()]}`.slice(0, 14),
     areas,
   };
@@ -456,8 +488,41 @@ function todayKeyOf(db, now = new Date()) {
   return dateKey(localParts(now, db.settings.timezone || 'Asia/Bangkok'));
 }
 
-function preview(db, groupId, key, design) {
-  return renderMenu(db, groupId || null, key || todayKeyOf(db), design);
+function preview(db, groupId, key, design, opts) {
+  return renderMenu(db, groupId || null, key || todayKeyOf(db), design, opts);
+}
+
+// ---------------- เมนูส่วนตัว (มีรหัสสมาชิกของแต่ละคน) ----------------
+// LINE ให้มีริชเมนูได้ไม่เกิน 1,000 ชุดต่อบัญชี จึงจำกัดเมนูส่วนตัวไว้ และให้คนที่ยังไม่เข้าห้องก่อน
+const MAX_MENUS = 950;
+function personalTargets(db, design = normalizeDesign(db.settings.richMenu?.design)) {
+  if (design.memberCode === 'off') return { users: [], skipped: 0 };
+  const active = db.recipients.filter((r) => r.type === 'user' && r.enabled !== false && !r.left && /^\d{6}$/.test(r.code || ''));
+  let list = design.memberCode === 'unassigned' ? active.filter((r) => !r.groupId) : active;
+  list = [...list].sort((a, b) => (a.groupId ? 1 : 0) - (b.groupId ? 1 : 0)); // ยังไม่เข้าห้องก่อน
+  const room = Math.max(0, MAX_MENUS - db.groups.length - 1);
+  return { users: list.slice(0, room), skipped: Math.max(0, list.length - room) };
+}
+const wantsPersonal = (db, r, design) => personalTargets(db, design).users.some((x) => x.id === r.id);
+
+/** สร้าง/อัปเดตเมนูส่วนตัวของผู้ใช้คนเดียว แล้วผูกให้ทันที (ใช้ตอนเพิ่มเพื่อนหรือย้ายห้อง) */
+async function buildPersonal(db, r, key = todayKeyOf(db)) {
+  const rm = db.settings.richMenu;
+  rm.personal = rm.personal || {};
+  const img = await renderMenu(db, r.groupId || null, key, null, { code: r.code });
+  const { richMenuId } = await line.richMenu.create(db.settings, menuDefinition(db, r.groupId || null, key, null, { code: r.code }));
+  try {
+    await line.richMenu.upload(db.settings, richMenuId, img.data, img.contentType);
+    await line.richMenu.linkUser(db.settings, r.id, richMenuId);
+  } catch (e) {
+    try { await line.richMenu.remove(db.settings, richMenuId); } catch { /* ignore */ }
+    throw e;
+  }
+  const old = rm.personal[r.id];
+  rm.personal[r.id] = richMenuId;
+  if (old && old !== richMenuId) { try { await line.richMenu.remove(db.settings, old); } catch { /* ลบไปแล้ว */ } }
+  store.save();
+  return richMenuId;
 }
 
 /** สร้างริชเมนูใหม่ของวันนี้ให้ทุกชั้น/ห้อง แล้วผูกกับผู้ใช้ และลบเมนูเก่า */
@@ -477,13 +542,36 @@ async function rebuild(db) {
       await line.richMenu.upload(settings, richMenuId, img.data, img.contentType);
     }
     await line.richMenu.setDefault(settings, created[DEFAULT_KEY]);
+    // คนที่จะได้เมนูส่วนตัวไม่ต้องผูกแบบกลุ่ม (bulk link ทำงานเบื้องหลัง อาจทับเมนูส่วนตัวได้)
+    const { users: personalUsers, skipped } = personalTargets(db);
+    const personalIds = new Set(personalUsers.map((r) => r.id));
     let linked = 0;
     for (const g of db.groups) {
-      const users = db.recipients.filter((r) => r.type === 'user' && r.groupId === g.id && r.enabled !== false && !r.left).map((r) => r.id);
+      const users = db.recipients.filter((r) => r.type === 'user' && r.groupId === g.id && r.enabled !== false && !r.left && !personalIds.has(r.id)).map((r) => r.id);
       if (users.length) { await line.richMenu.bulkLink(settings, created[g.id], users); linked += users.length; }
     }
-    const old = Object.values(rm.menus || {}).filter((id) => !Object.values(created).includes(id));
+    // เมนูส่วนตัวที่มีรหัสสมาชิก (สร้างหลังเมนูห้อง ถ้าสร้างไม่สำเร็จผู้ใช้ยังใช้เมนูห้องได้)
+    const personal = {};
+    let personalFailed = 0;
+    for (const r of personalUsers) {
+      try {
+        const img = await renderMenu(db, r.groupId || null, key, null, { code: r.code });
+        const { richMenuId } = await line.richMenu.create(settings, menuDefinition(db, r.groupId || null, key, null, { code: r.code }));
+        await line.richMenu.upload(settings, richMenuId, img.data, img.contentType);
+        await line.richMenu.linkUser(settings, r.id, richMenuId);
+        personal[r.id] = richMenuId;
+      } catch (e) {
+        personalFailed++;
+        if (personalFailed === 1) console.error('[richmenu] เมนูส่วนตัวไม่สำเร็จ:', e.message);
+      }
+    }
+    const keep = new Set([...Object.values(created), ...Object.values(personal)]);
+    const old = [...Object.values(rm.menus || {}), ...Object.values(rm.personal || {})].filter((id) => !keep.has(id));
     for (const id of old) { try { await line.richMenu.remove(settings, id); } catch { /* ลบไปแล้ว */ } }
+    rm.personal = personal;
+    rm.personalCount = Object.keys(personal).length;
+    rm.personalSkipped = skipped;
+    rm.personalFailed = personalFailed;
     rm.menus = created;
     rm.builtFor = key;
     rm.builtAt = new Date().toISOString();
@@ -492,8 +580,8 @@ async function rebuild(db) {
     rm.failedAt = null;
     rm.dirtyAt = null;
     rm.linked = linked;
-    console.log(`[richmenu] สร้างริชเมนู ${targets.length} ชุดของวันที่ ${key} และผูกผู้ใช้ ${linked} คน`);
-    return { menus: targets.length, linked, date: key, warning };
+    console.log(`[richmenu] สร้างริชเมนู ${targets.length} ชุด + เมนูส่วนตัว ${rm.personalCount} คน ของวันที่ ${key}`);
+    return { menus: targets.length, linked, personal: rm.personalCount, personalSkipped: skipped, personalFailed, date: key, warning };
   } catch (e) {
     for (const id of Object.values(created)) { try { await line.richMenu.remove(settings, id); } catch { /* ignore */ } }
     rm.lastError = e.message;
@@ -507,6 +595,12 @@ async function rebuild(db) {
 async function linkRecipient(db, r) {
   const rm = db.settings.richMenu;
   if (!rm?.enabled || r.type !== 'user' || !line.creds(db.settings).token) return;
+  if (rm.builtFor && wantsPersonal(db, r)) return buildPersonal(db, r);
+  if (rm.personal?.[r.id]) { // เคยมีเมนูส่วนตัว แต่ตอนนี้ไม่ต้องใช้แล้ว
+    const pid = rm.personal[r.id];
+    delete rm.personal[r.id];
+    line.richMenu.remove(db.settings, pid).catch(() => {});
+  }
   const id = r.groupId && rm.menus ? rm.menus[r.groupId] : null;
   if (id) await line.richMenu.linkUser(db.settings, r.id, id);
   else { try { await line.richMenu.unlinkUser(db.settings, r.id); } catch { /* ไม่ได้ผูกไว้ */ } }
@@ -516,13 +610,14 @@ async function linkRecipient(db, r) {
 async function removeAll(db) {
   const rm = db.settings.richMenu;
   try { await line.richMenu.clearDefault(db.settings); } catch { /* ignore */ }
-  for (const id of Object.values(rm.menus || {})) { try { await line.richMenu.remove(db.settings, id); } catch { /* ignore */ } }
+  for (const id of [...Object.values(rm.menus || {}), ...Object.values(rm.personal || {})]) { try { await line.richMenu.remove(db.settings, id); } catch { /* ignore */ } }
   rm.menus = {};
+  rm.personal = {};
   rm.builtFor = null;
 }
 
 module.exports = {
   W, ACTIONS, LAYOUTS, DEFAULT_DESIGN, normalizeDesign, geometry,
   buildSvg, render, renderMenu, preview, menuDefinition, menuInfo, rebuild, linkRecipient, removeAll, todayKeyOf, textWidth,
-  ensureGoogleFont, forgetImage,
+  ensureGoogleFont, forgetImage, buildPersonal, personalTargets, MAX_MENUS,
 };

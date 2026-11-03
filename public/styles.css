@@ -453,3 +453,5 @@ input[type=range] { padding: 0; border: 0; background: transparent; box-shadow: 
   .btn-row { grid-template-columns: 26px 1fr; }
   .btn-row > :nth-child(n+3) { grid-column: 2; }
 }
+.chk { display: inline-flex; align-items: center; gap: 6px; margin: 0; font-size: 13px; color: var(--text); font-weight: 500; }
+.chk input { width: auto; margin: 0; accent-color: var(--accent); }

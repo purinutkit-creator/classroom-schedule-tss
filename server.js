@@ -68,6 +68,8 @@ async function handleEvent(ev) {
     const me = db.recipients.find((x) => x.id === id);
     const msgs = [{ type: 'text', text: `สวัสดีครับ 👋 ระบบ${db.settings.appName}จะแจ้งเตือนก่อนเริ่มคาบเรียนให้อัตโนมัติ\n\nกดเมนูด้านล่าง หรือพิมพ์ "ตารางวันนี้" "ตารางพรุ่งนี้" "คาบถัดไป" "วันหยุด" "รหัส" ได้เลย` }];
     if (me?.code) msgs.push(line.memberCardMessage(me, db.groups.find((g) => g.id === me.groupId), db));
+    // ผู้ใช้ใหม่: สร้างริชเมนูส่วนตัวที่มีรหัสสมาชิกให้ทันที
+    if (me && me.type === 'user') richmenu.linkRecipient(db, me).catch((e) => console.error('[richmenu] personal:', e.message));
     return line.reply(db.settings, ev.replyToken, msgs);
   }
   if (ev.type === 'message' && ev.message?.type === 'text' && db.settings.line.replyKeywords) {
@@ -320,7 +322,7 @@ async function sendPreview(req, res, design) {
   const gid = q.group && db.groups.some((g) => g.id === q.group) ? q.group : null;
   const key = cal.isDateKey(q.date) ? q.date : richmenu.todayKeyOf(db);
   try {
-    const img = await richmenu.preview(db, gid, key, design);
+    const img = await richmenu.preview(db, gid, key, design, { code: q.code ? String(q.code) : undefined });
     res.type(img.contentType).set('Cache-Control', 'no-store').set('X-Image-Bytes', String(img.data.length));
     if (img.warning) res.set('X-Font-Warning', encodeURIComponent(img.warning));
     res.send(img.data);
