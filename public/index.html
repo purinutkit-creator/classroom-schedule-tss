@@ -30,7 +30,7 @@
       <div class="brand">
         <div class="brand-logo">📚</div>
         <div>
-          <div class="brand-name"><span data-bind="appName">ตารางสอน</span> <span class="ver">v3.0</span></div>
+          <div class="brand-name"><span data-bind="appName">ตารางสอน</span> <span class="ver">v3.1</span></div>
           <div class="brand-sub" data-bind="schoolName">Classroom Schedule</div>
         </div>
       </div>
@@ -40,6 +40,7 @@
         <a href="#groups" data-page="groups"><span class="ico">🎓</span><span>ชั้นเรียน</span></a>
         <a href="#calendar" data-page="calendar"><span class="ico">📆</span><span>วันพิเศษ</span></a>
         <a href="#rooms" data-page="rooms"><span class="ico">📍</span><span>ห้องเรียน</span></a>
+        <a href="#richmenu" data-page="richmenu"><span class="ico">🎨</span><span>ริชเมนู</span></a>
         <a href="#line" data-page="line"><span class="ico">💬</span><span>LINE OA</span></a>
         <a href="#settings" data-page="settings"><span class="ico">⚙️</span><span>ตั้งค่า</span></a>
       </nav>
@@ -122,8 +123,17 @@
         <div class="card mt" id="assign-card">
           <div class="card-head"><h3>ผูกบัญชี LINE กับชั้นเรียน</h3><span class="chip" id="unassigned-count"></span></div>
           <p class="muted small">ผู้รับที่เพิ่มเพื่อน OA หรือเชิญบอทเข้ากลุ่มจะขึ้นที่นี่ เลือกชั้นเรียนให้แต่ละบัญชี แล้วริชเมนูของผู้ใช้จะเปลี่ยนเป็นของห้องนั้นทันที</p>
+          <form class="code-form" id="code-form">
+            <div><b>➕ เพิ่มนักเรียนเข้าห้องด้วยรหัสสมาชิก</b><span class="muted small">นักเรียนกดเมนู “รหัสสมาชิก” หรือพิมพ์ “รหัส” ใน LINE เพื่อดูรหัส 6 หลัก แล้วแจ้งครู</span></div>
+            <div class="row gap wrap">
+              <input id="code-input" inputmode="numeric" autocomplete="off" maxlength="7" placeholder="000000" class="code-input" />
+              <select id="code-group" class="group-select"></select>
+              <button class="btn primary" type="submit">เพิ่มเข้าห้อง</button>
+            </div>
+            <p class="small" id="code-result"></p>
+          </form>
           <div class="row gap wrap mb">
-            <input type="search" id="assign-search" placeholder="🔎 ค้นหาชื่อ" class="grow" />
+            <input type="search" id="assign-search" placeholder="🔎 ค้นหาชื่อหรือรหัสสมาชิก" class="grow" />
             <select id="assign-filter" class="group-select"><option value="">ทั้งหมด</option><option value="__none">ยังไม่ระบุห้อง</option></select>
           </div>
           <div id="assign-list" class="recipients"></div>
@@ -163,6 +173,91 @@
             <div class="field-label mt">ตัวอย่างประกาศ</div>
             <div class="phone mini"><div class="phone-chat" id="announce-preview"></div></div>
           </form>
+        </div>
+      </section>
+
+
+      <!-- ริชเมนู -->
+      <section class="page" id="page-richmenu">
+        <header class="page-head">
+          <div>
+            <h1>ริชเมนู</h1>
+            <p class="muted">ออกแบบริชเมนูรายวันของ LINE OA ได้เอง ทั้งรูปแบบ สี รูปโลโก้หรือพื้นหลัง ฟอนต์ และปุ่ม ดูตัวอย่างได้ทันทีก่อนบันทึก</p>
+          </div>
+          <div class="row gap wrap">
+            <button class="btn" id="d-reset">↺ ค่าเริ่มต้น</button>
+            <button class="btn primary" id="d-save">💾 บันทึกการออกแบบ</button>
+          </div>
+        </header>
+        <div class="grid-2 align-start designer">
+          <form class="stack" id="design-form" onsubmit="return false">
+            <div class="card">
+              <div class="card-head"><h3>1. รูปแบบ</h3></div>
+              <div class="layout-picker" id="d-layouts"></div>
+            </div>
+            <div class="card">
+              <div class="card-head"><h3>2. สี</h3></div>
+              <div class="seg full" id="d-colormode">
+                <button type="button" data-mode="day">🌈 สีตามวัน (จ.เหลือง อ.ชมพู …)</button>
+                <button type="button" data-mode="custom">🎨 กำหนดเอง</button>
+              </div>
+              <div id="d-custom-colors">
+                <div class="field-label">ชุดสีสำเร็จรูป</div>
+                <div class="presets" id="d-presets"></div>
+                <div class="color-grid" id="d-colors"></div>
+              </div>
+            </div>
+            <div class="card">
+              <div class="card-head"><h3>3. รูปภาพและข้อความหัวเมนู</h3></div>
+              <label>ข้อความบนหัวเมนู<input name="title" maxlength="60" id="d-title" placeholder="เว้นว่าง = ใช้ชื่อโรงเรียนในหน้าตั้งค่า" /></label>
+              <div class="img-row">
+                <div class="img-slot" id="d-logo-slot"><div class="thumb" id="d-logo-thumb">โลโก้</div><div><b>โลโก้โรงเรียน</b><span class="muted small">PNG พื้นใส หรือ JPG · ไม่เกิน 5MB</span><div class="row gap"><label class="btn sm">อัปโหลด<input type="file" accept="image/png,image/jpeg" id="d-logo-file" hidden /></label><button type="button" class="btn sm ghost danger" id="d-logo-del">ลบ</button></div></div></div>
+                <div class="img-slot" id="d-bg-slot"><div class="thumb wide" id="d-bg-thumb">พื้นหลัง</div><div><b>รูปพื้นหลังหัวเมนู</b><span class="muted small">ภาพโรงเรียน/ภาพกิจกรรม · ระบบครอปให้อัตโนมัติ</span><div class="row gap"><label class="btn sm">อัปโหลด<input type="file" accept="image/png,image/jpeg" id="d-bg-file" hidden /></label><button type="button" class="btn sm ghost danger" id="d-bg-del">ลบ</button></div></div></div>
+              </div>
+              <label>ความเข้มของสีทับรูปพื้นหลัง <span id="d-overlay-val"></span><input type="range" min="0" max="1" step="0.05" id="d-overlay" /></label>
+            </div>
+            <div class="card">
+              <div class="card-head"><h3>4. ฟอนต์บนริชเมนู</h3></div>
+              <div class="seg full" id="d-fontsrc">
+                <button type="button" data-src="bundled">Prompt (มาตรฐาน)</button>
+                <button type="button" data-src="google">Google Fonts</button>
+                <button type="button" data-src="custom">ฟอนต์ที่อัปโหลด</button>
+              </div>
+              <div id="d-font-google" class="hidden"><label>ชื่อฟอนต์จาก Google Fonts<input id="d-gfont" list="gf-list" placeholder="เช่น Kanit, Sarabun, Mitr" /></label></div>
+              <div id="d-font-custom" class="hidden"><label>เลือกฟอนต์ (.ttf / .otf)<select id="d-cfont"></select></label><p class="muted small">อัปโหลดฟอนต์ได้ที่หน้า ตั้งค่า → ฟอนต์ · ไฟล์ .woff/.woff2 ใช้บนริชเมนูไม่ได้</p></div>
+              <p class="note">ℹ️ ฟอนต์ของหน้าเว็บตั้งได้ที่หน้า <a href="#settings">ตั้งค่า</a> ส่วนข้อความแชท (Flex Message) LINE จะแสดงด้วยฟอนต์ของแอป LINE เสมอ ตั้งเองไม่ได้</p>
+            </div>
+            <div class="card">
+              <div class="card-head"><h3>5. ปุ่มเมนู</h3></div>
+              <p class="muted small">เลือกคำสั่งของแต่ละปุ่ม เปลี่ยนชื่อปุ่ม/คำอธิบายได้ (เว้นว่าง = ค่าอัตโนมัติ) หรือทำเป็นลิงก์ไปเว็บไซต์</p>
+              <div id="d-buttons" class="btn-editor"></div>
+            </div>
+            <div class="card">
+              <div class="card-head"><h3>6. รายละเอียด</h3></div>
+              <label>ความโค้งของมุม <span id="d-radius-val"></span><input type="range" min="0" max="90" step="2" id="d-radius" /></label>
+              <label class="switch-row"><span>แสดงข้อความหัวเมนู</span><input type="checkbox" class="switch" data-opt="showTitle" /></label>
+              <label class="switch-row"><span>แสดงปฏิทินเล็ก</span><input type="checkbox" class="switch" data-opt="showCalendar" /></label>
+              <label class="switch-row"><span>แสดงป้ายชื่อห้อง (ม./ห้อง)</span><input type="checkbox" class="switch" data-opt="showGroup" /></label>
+              <label class="switch-row"><span>แสดงแถบ “วันนี้มี N คาบ” (แถบวันหยุดแสดงเสมอ)</span><input type="checkbox" class="switch" data-opt="showStrip" /></label>
+              <label class="switch-row"><span>แสดงไอคอนบนปุ่ม</span><input type="checkbox" class="switch" data-opt="showIcons" /></label>
+            </div>
+          </form>
+
+            <div class="card sticky" id="richmenu-card">
+              <div class="card-head"><h3>สถานะและตัวอย่าง</h3><span class="badge" id="rm-badge">ปิดอยู่</span></div>
+              <p class="muted small">ระบบสร้างริชเมนูใหม่ทุกวันตอนเที่ยงคืน แยกตามชั้นเรียน สีตามวัน มีวันที่และชื่อวัน และแสดง “พรุ่งนี้หยุด” เมื่อวันถัดไปเป็นวันหยุด เมื่อแก้ตาราง ชั้นเรียน หรือวันพิเศษ ระบบจะสร้างใหม่ให้อัตโนมัติ</p>
+              <label class="switch-row"><span><b>เปิดใช้ริชเมนูรายวัน</b></span><input type="checkbox" class="switch" id="rm-enabled" /></label>
+              <label class="switch-row"><span>เปิดเมนูค้างไว้เมื่อเข้าแชท</span><input type="checkbox" class="switch" id="rm-selected" /></label>
+              <div class="row gap wrap mb">
+                <select id="rm-group" class="group-select"></select>
+                <input type="date" id="rm-date" class="date-in" />
+                <button type="button" class="btn sm" id="rm-tomorrow">ดูพรุ่งนี้</button>
+              </div>
+              <div class="rm-preview"><img id="rm-img" alt="ตัวอย่างริชเมนู" /><div id="rm-loading" class="muted small">กำลังสร้างตัวอย่าง…</div></div>
+              <p class="muted small" id="rm-meta"></p>
+              <p class="small" id="rm-status"></p>
+              <button type="button" class="btn primary" id="rm-rebuild">🔄 สร้างและอัปเดตริชเมนูตอนนี้</button>
+            </div>
         </div>
       </section>
 
@@ -231,20 +326,7 @@
               <div id="recipients" class="recipients"></div>
             </form>
 
-            <div class="card" id="richmenu-card">
-              <div class="card-head"><h3>3. ริชเมนูรายวัน</h3><span class="badge" id="rm-badge">ปิดอยู่</span></div>
-              <p class="muted small">ระบบสร้างริชเมนูใหม่ทุกวันตอนเที่ยงคืน แยกตามชั้นเรียน สีตามวัน มีวันที่และชื่อวัน และแสดง “พรุ่งนี้หยุด” เมื่อวันถัดไปเป็นวันหยุด เมื่อแก้ตาราง ชั้นเรียน หรือวันพิเศษ ระบบจะสร้างใหม่ให้อัตโนมัติ</p>
-              <label class="switch-row"><span><b>เปิดใช้ริชเมนูรายวัน</b></span><input type="checkbox" class="switch" id="rm-enabled" /></label>
-              <label class="switch-row"><span>เปิดเมนูค้างไว้เมื่อเข้าแชท</span><input type="checkbox" class="switch" id="rm-selected" /></label>
-              <div class="row gap wrap mb">
-                <select id="rm-group" class="group-select"></select>
-                <input type="date" id="rm-date" class="date-in" />
-                <button type="button" class="btn sm" id="rm-tomorrow">ดูพรุ่งนี้</button>
-              </div>
-              <div class="rm-preview"><img id="rm-img" alt="ตัวอย่างริชเมนู" /><div id="rm-loading" class="muted small">กำลังสร้างตัวอย่าง…</div></div>
-              <p class="small" id="rm-status"></p>
-              <button type="button" class="btn primary" id="rm-rebuild">🔄 สร้างและอัปเดตริชเมนูตอนนี้</button>
-            </div>
+            <a class="card link-card" href="#richmenu"><b>3. ริชเมนูรายวัน 🎨</b><span class="muted small">ออกแบบสี รูป ฟอนต์ รูปแบบ และปุ่มของริชเมนู ›</span></a>
           </div>
 
           <div class="card sticky">

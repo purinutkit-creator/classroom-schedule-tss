@@ -12,6 +12,7 @@ const vision = require('./src/vision');
 const cal = require('./src/calendar');
 const notify = require('./src/notify');
 const richmenu = require('./src/richmenu');
+const members = require('./src/members');
 const { DAY_NAMES, localParts, isValidTime, isValidTimeZone, toMin } = require('./src/time');
 
 const app = express();
@@ -51,7 +52,7 @@ async function handleEvent(ev) {
   if (id && db.settings.line.autoAddFollowers && ['follow', 'join', 'message', 'memberJoined'].includes(ev.type)) {
     let r = db.recipients.find((x) => x.id === id);
     if (!r) {
-      r = { id, type, name: '', enabled: true, addedAt: new Date().toISOString() };
+      r = { id, type, name: '', enabled: true, code: members.genCode(db), addedAt: new Date().toISOString() };
       db.recipients.push(r);
       try {
         r.name = type === 'user' ? (await line.profile(db.settings, id)).displayName
@@ -59,13 +60,15 @@ async function handleEvent(ev) {
       } catch { r.name = type === 'user' ? 'ผู้ใช้ LINE' : 'กลุ่ม LINE'; }
       store.save();
     } else if (r.left) { r.left = false; r.enabled = true; store.save(); }
+    if (r && !r.code) { r.code = members.genCode(db); store.save(); }
   }
 
   if (!ev.replyToken) return;
   if (ev.type === 'follow' || ev.type === 'join') {
-    return line.reply(db.settings, ev.replyToken, [
-      { type: 'text', text: `สวัสดีครับ 👋 ระบบ${db.settings.appName}จะแจ้งเตือนก่อนเริ่มคาบเรียนให้อัตโนมัติ\n\nกดเมนูด้านล่าง หรือพิมพ์ "ตารางวันนี้" "ตารางพรุ่งนี้" "คาบถัดไป" "วันหยุด" ได้เลย` },
-    ]);
+    const me = db.recipients.find((x) => x.id === id);
+    const msgs = [{ type: 'text', text: `สวัสดีครับ 👋 ระบบ${db.settings.appName}จะแจ้งเตือนก่อนเริ่มคาบเรียนให้อัตโนมัติ\n\nกดเมนูด้านล่าง หรือพิมพ์ "ตารางวันนี้" "ตารางพรุ่งนี้" "คาบถัดไป" "วันหยุด" "รหัส" ได้เลย` }];
+    if (me?.code) msgs.push(line.memberCardMessage(me, db.groups.find((g) => g.id === me.groupId), db));
+    return line.reply(db.settings, ev.replyToken, msgs);
   }
   if (ev.type === 'message' && ev.message?.type === 'text' && db.settings.line.replyKeywords) {
     const msgs = keywordReply(db, ev.message.text, db.recipients.find((x) => x.id === id));
@@ -90,7 +93,7 @@ function keywordReply(db, text, recipient) {
   const gid = group ? group.id : null;
   const gname = group ? group.name : '';
   const noGroupNote = !group && db.groups.length
-    ? [{ type: 'text', text: 'ℹ️ บัญชีนี้ยังไม่ได้ผูกกับชั้นเรียน จึงแสดงเฉพาะคาบที่ใช้ร่วมทุกห้อง กรุณาแจ้งครู/ผู้ดูแลระบบให้กำหนดชั้นเรียนให้' }]
+    ? [{ type: 'text', text: `ℹ️ บัญชีนี้ยังไม่ได้เข้าชั้นเรียน จึงแสดงเฉพาะคาบที่ใช้ร่วมทุกห้อง${recipient?.code ? `\nแจ้งรหัสสมาชิก ${recipient.code} กับครูเพื่อเข้าห้อง` : ''}` }]
     : [];
 
   const dayReply = (key, title) => {
@@ -128,10 +131,9 @@ function keywordReply(db, text, recipient) {
     return [{ type: 'text', text: 'ไม่พบคาบเรียนในอีก 3 สัปดาห์ข้างหน้า' }].concat(noGroupNote);
   }
   if (/^(วันหยุด|ปฏิทิน|กิจกรรม|holiday)/i.test(t)) return [line.upcomingSpecialMessage(cal.upcoming(db, todayKey, 10), db, todayKey)];
-  if (/^ห้องของฉัน$|^ชั้นของฉัน$/.test(t)) {
-    if (!group) return [{ type: 'text', text: 'บัญชีนี้ยังไม่ได้ผูกกับชั้นเรียน กรุณาแจ้งครู/ผู้ดูแลระบบให้กำหนด ม./ห้อง ให้ แล้วเมนูและการแจ้งเตือนจะเปลี่ยนเป็นของห้องคุณอัตโนมัติ' }];
-    const count = db.classes.filter((c) => c.groupId === gid).length;
-    return [{ type: 'text', text: `🏫 ชั้นเรียนของคุณ: ${group.name}\n📚 ${count} คาบต่อสัปดาห์\n🔔 แจ้งเตือนก่อนเริ่มคาบผ่าน LINE อัตโนมัติ${group.note ? `\n📝 ${group.note}` : ''}` }];
+  if (/^(ห้องของฉัน|ชั้นของฉัน|รหัส|รหัสสมาชิก|my ?code|code)$/i.test(t)) {
+    if (!recipient) return [{ type: 'text', text: 'ยังไม่พบบัญชีนี้ในระบบ กรุณาลองพิมพ์อีกครั้ง' }];
+    return [line.memberCardMessage(recipient, group, db)];
   }
   const idx = DAY_NAMES.findIndex((d) => t.includes(d));
   if (idx >= 0 && t.includes('ตาราง')) {
@@ -312,12 +314,54 @@ function markDirty() {
   const rm = store.db.settings.richMenu;
   if (rm && rm.enabled) { rm.dirtyAt = Date.now(); rm.failedAt = null; }
 }
-app.get('/api/richmenu/preview.png', (req, res) => {
+async function sendPreview(req, res, design) {
   const db = store.db;
-  const gid = req.query.group && db.groups.some((g) => g.id === req.query.group) ? req.query.group : null;
-  const key = cal.isDateKey(req.query.date) ? req.query.date : richmenu.todayKeyOf(db);
-  try { res.type('png').set('Cache-Control', 'no-store').send(richmenu.preview(db, gid, key)); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  const q = { ...req.query, ...(req.body || {}) };
+  const gid = q.group && db.groups.some((g) => g.id === q.group) ? q.group : null;
+  const key = cal.isDateKey(q.date) ? q.date : richmenu.todayKeyOf(db);
+  try {
+    const img = await richmenu.preview(db, gid, key, design);
+    res.type(img.contentType).set('Cache-Control', 'no-store').set('X-Image-Bytes', String(img.data.length));
+    if (img.warning) res.set('X-Font-Warning', encodeURIComponent(img.warning));
+    res.send(img.data);
+  } catch (e) { res.status(400).json({ error: e.message }); }
+}
+app.get('/api/richmenu/preview.png', (req, res) => sendPreview(req, res));
+// ดูตัวอย่างการออกแบบที่ยังไม่บันทึก
+app.post('/api/richmenu/preview', (req, res) => sendPreview(req, res, req.body?.design));
+app.get('/api/richmenu/design', (req, res) => {
+  res.json({ design: richmenu.normalizeDesign(store.db.settings.richMenu.design), layouts: richmenu.LAYOUTS, actions: richmenu.ACTIONS });
+});
+app.put('/api/richmenu/design', async (req, res) => {
+  const db = store.db;
+  const design = richmenu.normalizeDesign(req.body?.design);
+  if (design.font.source === 'google') {
+    try { await richmenu.ensureGoogleFont(design.font.family); } catch (e) { return res.status(400).json({ error: e.message }); }
+  }
+  db.settings.richMenu.design = design;
+  markDirty();
+  store.save();
+  res.json({ design });
+});
+// อัปโหลดโลโก้/รูปพื้นหลังของริชเมนู
+const IMG_EXT = { 'image/png': '.png', 'image/jpeg': '.jpg' };
+const rmImageUpload = multer({
+  storage: multer.diskStorage({ destination: store.FONT_DIR, filename: (req, file, cb) => cb(null, `img-${store.uid()}${IMG_EXT[file.mimetype] || '.png'}`) }),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => cb(IMG_EXT[file.mimetype] ? null : new Error('รองรับเฉพาะรูป PNG หรือ JPG'), true),
+});
+app.post('/api/richmenu/image', (req, res) => {
+  rmImageUpload.single('image')(req, res, async (err) => {
+    if (err) return res.status(400).json({ error: err.code === 'LIMIT_FILE_SIZE' ? 'รูปใหญ่เกิน 5MB' : err.message });
+    if (!req.file) return res.status(400).json({ error: 'กรุณาเลือกรูป' });
+    try { await store.persistFont(req.file.filename); } catch (e) { return res.status(500).json({ error: e.message }); }
+    res.status(201).json({ file: req.file.filename });
+  });
+});
+app.get('/api/richmenu/image/:file', (req, res) => {
+  const f = path.basename(req.params.file);
+  if (!/^img-[a-z0-9]+\.(png|jpe?g)$/i.test(f)) return res.status(404).end();
+  res.sendFile(path.join(store.FONT_DIR, f), (e) => { if (e && !res.headersSent) res.status(404).end(); });
 });
 app.put('/api/richmenu', async (req, res) => {
   const db = store.db;
@@ -490,7 +534,7 @@ app.post('/api/recipients', (req, res) => {
   const id = String(req.body?.id || '').trim();
   if (!/^[UCR][0-9a-f]{32}$/.test(id)) return res.status(400).json({ error: 'ID ต้องขึ้นต้นด้วย U/C/R ตามด้วยอักขระ 32 ตัว' });
   if (store.db.recipients.some((r) => r.id === id)) return res.status(409).json({ error: 'มีผู้รับนี้แล้ว' });
-  const r = { id, type: { U: 'user', C: 'group', R: 'room' }[id[0]], name: String(req.body.name || '').slice(0, 80) || 'ผู้รับ', enabled: true, addedAt: new Date().toISOString() };
+  const r = { id, type: { U: 'user', C: 'group', R: 'room' }[id[0]], name: String(req.body.name || '').slice(0, 80) || 'ผู้รับ', enabled: true, code: members.genCode(store.db), addedAt: new Date().toISOString() };
   store.db.recipients.push(r); store.save(); res.status(201).json(r);
 });
 app.put('/api/recipients/:id', (req, res) => {
@@ -507,6 +551,22 @@ app.put('/api/recipients/:id', (req, res) => {
     }
   }
   store.save(); res.json(r);
+});
+// เพิ่มบัญชี LINE เข้าชั้นเรียนด้วยรหัสสมาชิก 6 หลัก
+app.post('/api/members/assign', (req, res) => {
+  const db = store.db;
+  const code = members.normalizeCode(req.body?.code);
+  if (code.length !== 6) return res.status(400).json({ error: 'รหัสสมาชิกต้องเป็นตัวเลข 6 หลัก' });
+  const r = members.findByCode(db, code);
+  if (!r) return res.status(404).json({ error: `ไม่พบรหัส ${code} — ให้นักเรียนพิมพ์ “รหัส” ใน LINE เพื่อดูรหัสที่ถูกต้อง` });
+  const group = db.groups.find((g) => g.id === req.body.groupId);
+  if (!group) return res.status(400).json({ error: 'กรุณาเลือกชั้นเรียน' });
+  const moved = r.groupId && r.groupId !== group.id ? db.groups.find((g) => g.id === r.groupId)?.name : null;
+  r.groupId = group.id;
+  if (r.left) { r.left = false; r.enabled = true; }
+  store.save();
+  richmenu.linkRecipient(db, r).catch((e) => console.error('[richmenu] link:', e.message));
+  res.json({ ok: true, recipient: r, group: group.name, movedFrom: moved });
 });
 app.delete('/api/recipients/:id', (req, res) => {
   store.db.recipients = store.db.recipients.filter((x) => x.id !== req.params.id);
@@ -654,8 +714,9 @@ app.post('/api/import', (req, res) => {
     if (Array.isArray(recipients)) {
       db.recipients = recipients
         .filter((r) => r && /^[UCR][0-9a-f]{32}$/.test(r.id))
-        .map((r) => ({ id: r.id, type: { U: 'user', C: 'group', R: 'room' }[r.id[0]], name: String(r.name || '').slice(0, 80), enabled: r.enabled !== false, left: !!r.left, groupId: r.groupId && db.groups.some((g) => g.id === r.groupId) ? r.groupId : null, addedAt: r.addedAt || new Date().toISOString() }));
+        .map((r) => ({ id: r.id, type: { U: 'user', C: 'group', R: 'room' }[r.id[0]], name: String(r.name || '').slice(0, 80), enabled: r.enabled !== false, left: !!r.left, groupId: r.groupId && db.groups.some((g) => g.id === r.groupId) ? r.groupId : null, code: /^\d{6}$/.test(r.code || '') ? r.code : undefined, addedAt: r.addedAt || new Date().toISOString() }));
     }
+    members.ensureCodes(db);
     db.sent = {};
     markDirty();
     store.save();
@@ -682,6 +743,8 @@ function startKeepAlive() {
 
 if (require.main === module) {
   store.init().then(() => {
+    const filled = members.ensureCodes(store.db);
+    if (filled) { console.log(`[members] สร้างรหัสสมาชิกให้บัญชีเดิม ${filled} บัญชี`); store.save(); }
     app.listen(PORT, () => {
       console.log(`📚 ตารางสอนพร้อมใช้งานที่ http://localhost:${PORT}`);
       scheduler.start();

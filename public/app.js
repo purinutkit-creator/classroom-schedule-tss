@@ -82,11 +82,12 @@
   // ---------------- Router ----------------
   function route() {
     const page = (location.hash || '#dashboard').slice(1);
-    const valid = ['dashboard', 'timetable', 'groups', 'calendar', 'rooms', 'line', 'settings'].includes(page) ? page : 'dashboard';
+    const valid = ['dashboard', 'timetable', 'groups', 'calendar', 'richmenu', 'rooms', 'line', 'settings'].includes(page) ? page : 'dashboard';
     $$('.page').forEach((p) => p.classList.toggle('active', p.id === `page-${valid}`));
     $$('#nav a').forEach((a) => a.classList.toggle('active', a.dataset.page === valid));
     if (valid === 'rooms') setTimeout(renderOverviewMap, 50);
-    if (valid === 'line') { renderPreview(); loadRichMenuPreview(); }
+    if (valid === 'line') renderPreview();
+    if (valid === 'richmenu') (D ? Promise.resolve() : loadDesign()).then(loadRichMenuPreview).catch((e) => toast(e.message, 'err'));
     if (valid === 'calendar') renderAnnouncePreview();
     window.scrollTo(0, 0);
   }
@@ -415,6 +416,7 @@
     $('#recipients').innerHTML = S.recipients.length ? S.recipients.map((r) => `<div class="rcp">
         <div class="rcp-av">${r.type === 'user' ? '👤' : '👥'}</div>
         <div class="grow"><div class="rcp-name">${esc(r.name || 'ไม่ทราบชื่อ')} ${r.left ? '<span class="muted small">(ออกแล้ว)</span>' : ''}</div><div class="rcp-id">${esc(r.id)}</div></div>
+        ${r.code ? `<span class="code-pill" title="รหัสสมาชิก">${r.code}</span>` : ''}
         ${S.groups.length ? `<select data-rcp-group="${esc(r.id)}" title="ชั้นเรียน">${groupOptions(r.groupId || '', { none: '— ยังไม่ระบุห้อง —' })}</select>` : ''}
         <input type="checkbox" class="switch" data-rcp-toggle="${esc(r.id)}" ${r.enabled ? 'checked' : ''} title="เปิด/ปิดการส่ง" />
         <button type="button" class="icon-btn" data-rcp-del="${esc(r.id)}" title="ลบ">🗑</button>
@@ -969,6 +971,7 @@
       </div>`;
     }).join('') : '<div class="card empty" style="grid-column:1/-1"><span class="big">🎓</span>ยังไม่มีชั้นเรียน กด “สร้างหลายห้อง” เพื่อสร้าง ม.1–ม.6 ได้ในครั้งเดียว</div>';
     renderAssign();
+    renderCodeForm();
   }
   function renderAssign() {
     const q = $('#assign-search').value.trim().toLowerCase();
@@ -978,7 +981,7 @@
     sel.innerHTML = '<option value="">ทั้งหมด</option><option value="__none">ยังไม่ระบุห้อง</option>' + S.groups.map((g) => `<option value="${g.id}">${esc(g.name)}</option>`).join('');
     sel.value = [...sel.options].some((o) => o.value === keep) ? keep : '';
     const list = S.recipients.filter((r) => !r.left)
-      .filter((r) => !q || (r.name || '').toLowerCase().includes(q))
+      .filter((r) => !q || (r.name || '').toLowerCase().includes(q) || (r.code || '').includes(q))
       .filter((r) => !f || (f === '__none' ? !r.groupId : r.groupId === f));
     const none = S.recipients.filter((r) => !r.left && !r.groupId).length;
     $('#unassigned-count').textContent = none ? `ยังไม่ระบุห้อง ${none}` : 'ระบุห้องครบแล้ว';
@@ -986,6 +989,7 @@
       : list.length ? list.map((r) => `<div class="rcp">
         <div class="rcp-av">${r.type === 'user' ? '👤' : '👥'}</div>
         <div class="grow"><div class="rcp-name">${esc(r.name || 'ไม่ทราบชื่อ')}</div><div class="rcp-id">${r.type === 'user' ? 'ผู้ใช้ LINE' : 'กลุ่ม LINE'} · ${esc(r.id.slice(0, 10))}…</div></div>
+        ${r.code ? `<span class="code-pill" title="รหัสสมาชิก">${r.code}</span>` : ''}
         <select data-assign="${esc(r.id)}">${groupOptions(r.groupId || '', { none: '— ยังไม่ระบุห้อง —' })}</select>
       </div>`).join('') : '<div class="empty small">ไม่พบบัญชีที่ตรงเงื่อนไข</div>';
   }
@@ -1197,14 +1201,18 @@
     const seq = ++rmSeq;
     $('#rm-loading').classList.remove('hidden');
     try {
-      const qs = new URLSearchParams({ group: $('#rm-group').value, date: $('#rm-date').value || S.todayKey });
-      const res = await fetch(`/api/richmenu/preview.png?${qs}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
-      if (!res.ok) throw new Error('สร้างตัวอย่างไม่ได้');
+      const body = { group: $('#rm-group').value, date: $('#rm-date').value || S.todayKey, design: D || undefined };
+      const res = await fetch('/api/richmenu/preview', { method: 'POST', headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify(body) });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'สร้างตัวอย่างไม่ได้');
       const blob = await res.blob();
       if (seq !== rmSeq) return;
       if (rmUrl) URL.revokeObjectURL(rmUrl);
       rmUrl = URL.createObjectURL(blob);
       $('#rm-img').src = rmUrl;
+      $('.rm-preview').style.aspectRatio = D && DMETA ? `2500 / ${DMETA.layouts[D.layout].h}` : '';
+      const kb = Math.round(+(res.headers.get('X-Image-Bytes') || blob.size) / 1024);
+      const warn = res.headers.get('X-Font-Warning');
+      $('#rm-meta').innerHTML = `${blob.type === 'image/jpeg' ? 'JPEG' : 'PNG'} · ${kb} KB (LINE รับไม่เกิน 1,024 KB)${warn ? ` · <span style="color:var(--danger)">⚠️ ${esc(decodeURIComponent(warn))} — ใช้ Prompt แทน</span>` : ''}`;
     } catch (e) { toast(e.message, 'err'); } finally { if (seq === rmSeq) $('#rm-loading').classList.add('hidden'); }
   }
   $('#rm-group').onchange = loadRichMenuPreview;
@@ -1224,6 +1232,167 @@
     toast(`อัปเดตริชเมนู ${r.menus} ชุดแล้ว · ผูกผู้ใช้ ${r.linked} คน ✨`, 'ok');
     await refresh();
   });
+
+  // ---------------- รหัสสมาชิก ----------------
+  $('#code-input').addEventListener('input', (e) => { e.target.value = e.target.value.replace(/\D/g, '').slice(0, 6); });
+  $('#code-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const out = $('#code-result');
+    const code = $('#code-input').value;
+    const groupId = $('#code-group').value;
+    out.className = 'small';
+    if (code.length !== 6) { out.textContent = 'กรุณาใส่รหัส 6 หลัก'; out.classList.add('err'); return; }
+    if (!groupId) { out.textContent = 'กรุณาเลือกชั้นเรียน'; out.classList.add('err'); return; }
+    try {
+      const r = await api('/api/members/assign', { method: 'POST', body: { code, groupId } });
+      out.textContent = `✅ เพิ่ม “${r.recipient.name || 'ผู้ใช้ LINE'}” เข้า ${r.group} แล้ว${r.movedFrom ? ` (ย้ายจาก ${r.movedFrom})` : ''}${S.settings.richMenu?.enabled ? ' · เปลี่ยนริชเมนูให้แล้ว' : ''}`;
+      out.classList.add('ok');
+      $('#code-input').value = '';
+      $('#code-input').focus();
+      await refresh();
+    } catch (er) { out.textContent = er.message; out.classList.add('err'); }
+  });
+  function renderCodeForm() {
+    const sel = $('#code-group');
+    const keep = sel.value || ttGroup;
+    sel.innerHTML = S.groups.length ? S.groups.map((g) => `<option value="${g.id}">${esc(g.name)}</option>`).join('') : '<option value="">ยังไม่มีชั้นเรียน</option>';
+    if ([...sel.options].some((o) => o.value === keep)) sel.value = keep;
+  }
+
+  // ---------------- ออกแบบริชเมนู ----------------
+  const D_COLORS = [['header', 'สีหัวเมนู'], ['headerText', 'ตัวอักษรหัวเมนู'], ['accent', 'ไอคอน/จุดเด่น'], ['page', 'พื้นหลังเมนู'], ['button', 'พื้นปุ่ม'], ['buttonText', 'ชื่อปุ่ม'], ['subText', 'คำอธิบายปุ่ม']];
+  const D_PRESETS = [
+    { header: '#4f46e5', headerText: '#ffffff', accent: '#4f46e5', page: '#f3f4f8', button: '#ffffff', buttonText: '#1e2235', subText: '#6b7290' },
+    { header: '#7f1d1d', headerText: '#fef3c7', accent: '#b91c1c', page: '#fff7ed', button: '#ffffff', buttonText: '#431407', subText: '#9a3412' },
+    { header: '#0f766e', headerText: '#ffffff', accent: '#0f766e', page: '#ecfdf5', button: '#ffffff', buttonText: '#134e4a', subText: '#5f7d7a' },
+    { header: '#1e3a8a', headerText: '#fde68a', accent: '#1d4ed8', page: '#eff6ff', button: '#ffffff', buttonText: '#172554', subText: '#475569' },
+    { header: '#111827', headerText: '#f9fafb', accent: '#f59e0b', page: '#1f2937', button: '#374151', buttonText: '#f9fafb', subText: '#d1d5db' },
+    { header: '#db2777', headerText: '#ffffff', accent: '#db2777', page: '#fdf2f8', button: '#ffffff', buttonText: '#500724', subText: '#9d174d' },
+    { header: '#f59e0b', headerText: '#422006', accent: '#b45309', page: '#fffbeb', button: '#ffffff', buttonText: '#422006', subText: '#92400e' },
+  ];
+  const MINI = {
+    grid6: '<div class="mini tall" style="grid-template-columns:repeat(3,1fr);grid-template-rows:2fr 1fr 1fr"><i class="h" style="grid-column:1/-1"></i><i></i><i></i><i></i><i></i><i></i><i></i></div>',
+    grid4: '<div class="mini tall" style="grid-template-columns:repeat(2,1fr);grid-template-rows:2fr 1fr 1fr"><i class="h" style="grid-column:1/-1"></i><i></i><i></i><i></i><i></i></div>',
+    compact3: '<div class="mini half" style="grid-template-columns:repeat(3,1fr);grid-template-rows:1fr 1fr"><i class="h" style="grid-column:1/-1"></i><i></i><i></i><i></i></div>',
+    banner4: '<div class="mini half" style="grid-template-columns:1.4fr 1fr 1fr;grid-template-rows:1fr 1fr"><i class="h" style="grid-row:1/-1"></i><i></i><i></i><i></i><i></i></div>',
+  };
+  let D = null, DMETA = null, dTimer = null, dImgUrls = {};
+
+  async function loadDesign() {
+    const r = await api('/api/richmenu/design');
+    D = r.design; DMETA = { layouts: r.layouts, actions: r.actions };
+    renderDesigner();
+  }
+  function renderDesigner() {
+    if (!D) return;
+    $('#d-layouts').innerHTML = Object.entries(DMETA.layouts).map(([k, l]) => `<button type="button" data-layout="${k}" class="${D.layout === k ? 'active' : ''}">${MINI[k]}${esc(l.name)}</button>`).join('');
+    $$('#d-colormode button').forEach((b) => b.classList.toggle('active', b.dataset.mode === D.colorMode));
+    $('#d-custom-colors').classList.toggle('hidden', D.colorMode !== 'custom');
+    $('#d-presets').innerHTML = D_PRESETS.map((p, i) => `<button type="button" data-preset="${i}" title="ชุดสี ${i + 1}"><span style="background:${p.header}"></span><span style="background:${p.accent}"></span><span style="background:${p.page}"></span></button>`).join('');
+    $('#d-colors').innerHTML = D_COLORS.map(([k, label]) => `<label><input type="color" data-color="${k}" value="${D.colors[k]}" />${label}</label>`).join('');
+    $('#d-title').value = D.title || '';
+    $('#d-title').placeholder = S.settings.schoolName || S.settings.appName || 'ชื่อโรงเรียน';
+    $('#d-overlay').value = D.bgOverlay; $('#d-overlay-val').textContent = `${Math.round(D.bgOverlay * 100)}%`;
+    $('#d-radius').value = D.radius; $('#d-radius-val').textContent = `${D.radius}px`;
+    $$('#design-form [data-opt]').forEach((x) => { x.checked = !!D[x.dataset.opt]; });
+    $$('#d-fontsrc button').forEach((b) => b.classList.toggle('active', b.dataset.src === D.font.source));
+    $('#d-font-google').classList.toggle('hidden', D.font.source !== 'google');
+    $('#d-font-custom').classList.toggle('hidden', D.font.source !== 'custom');
+    if (D.font.source === 'google') $('#d-gfont').value = D.font.family;
+    const ttf = S.fonts.filter((f) => /\.(ttf|otf)$/i.test(f.file));
+    $('#d-cfont').innerHTML = ttf.length ? ttf.map((f) => `<option value="${f.id}" ${f.id === D.font.customFontId ? 'selected' : ''}>${esc(f.family)}</option>`).join('') : '<option value="">ยังไม่มีฟอนต์ .ttf/.otf ที่อัปโหลด</option>';
+    renderButtonsEditor();
+    renderImageThumbs();
+  }
+  function renderButtonsEditor() {
+    const opts = (sel) => Object.entries(DMETA.actions).map(([k, a]) => `<option value="${k}" ${k === sel ? 'selected' : ''}>${k === 'link' ? '🔗 ลิงก์เว็บไซต์' : esc(a.label)}</option>`).join('');
+    $('#d-buttons').innerHTML = D.buttons.map((b, i) => `<div class="btn-row" data-i="${i}">
+      <span class="n">${i + 1}</span>
+      <select data-b="action">${opts(b.action)}</select>
+      <input data-b="label" maxlength="20" placeholder="ชื่อปุ่ม (อัตโนมัติ)" value="${esc(b.label)}" />
+      <input data-b="sub" maxlength="40" placeholder="คำอธิบาย (อัตโนมัติ)" value="${esc(b.sub || '')}" />
+      ${b.action === 'link' ? `<input class="url" data-b="url" placeholder="https://..." value="${esc(b.url || '')}" />` : ''}
+    </div>`).join('');
+  }
+  async function renderImageThumbs() {
+    for (const [k, el] of [['logoFile', '#d-logo-thumb'], ['bgFile', '#d-bg-thumb']]) {
+      const f = D[k];
+      const t = $(el);
+      t.classList.toggle('has', !!f);
+      if (!f) { t.style.backgroundImage = ''; continue; }
+      if (!dImgUrls[f]) {
+        try {
+          const res = await fetch(`/api/richmenu/image/${f}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+          dImgUrls[f] = URL.createObjectURL(await res.blob());
+        } catch { continue; }
+      }
+      t.style.backgroundImage = `url(${dImgUrls[f]})`;
+    }
+    $('#d-logo-del').classList.toggle('hidden', !D.logoFile);
+    $('#d-bg-del').classList.toggle('hidden', !D.bgFile);
+  }
+  function designChanged(rerender) {
+    if (rerender) renderDesigner();
+    clearTimeout(dTimer);
+    dTimer = setTimeout(loadRichMenuPreview, 350);
+  }
+  $('#d-layouts').onclick = (e) => {
+    const b = e.target.closest('[data-layout]'); if (!b) return;
+    D.layout = b.dataset.layout;
+    const slots = DMETA.layouts[D.layout].slots;
+    const defaults = ['today', 'tomorrow', 'next', 'week', 'holiday', 'me'];
+    while (D.buttons.length < slots) D.buttons.push({ action: defaults[D.buttons.length] || 'today', label: '', sub: '', url: '' });
+    D.buttons = D.buttons.slice(0, slots);
+    if (slots < 6 && !D.buttons.some((x) => x.action === 'me' || x.action === 'code')) D.buttons[slots - 1] = { action: 'me', label: '', sub: '', url: '' };
+    designChanged(true);
+  };
+  $('#d-colormode').onclick = (e) => { const b = e.target.closest('[data-mode]'); if (b) { D.colorMode = b.dataset.mode; designChanged(true); } };
+  $('#d-presets').onclick = (e) => { const b = e.target.closest('[data-preset]'); if (b) { D.colors = { ...D_PRESETS[+b.dataset.preset] }; designChanged(true); } };
+  $('#d-colors').addEventListener('input', (e) => { const k = e.target.dataset.color; if (k) { D.colors[k] = e.target.value; designChanged(); } });
+  $('#d-title').addEventListener('input', (e) => { D.title = e.target.value; designChanged(); });
+  $('#d-overlay').addEventListener('input', (e) => { D.bgOverlay = +e.target.value; $('#d-overlay-val').textContent = `${Math.round(D.bgOverlay * 100)}%`; designChanged(); });
+  $('#d-radius').addEventListener('input', (e) => { D.radius = +e.target.value; $('#d-radius-val').textContent = `${D.radius}px`; designChanged(); });
+  $('#design-form').addEventListener('change', (e) => { const o = e.target.dataset.opt; if (o) { D[o] = e.target.checked; designChanged(); } });
+  $('#d-fontsrc').onclick = (e) => {
+    const b = e.target.closest('[data-src]'); if (!b) return;
+    D.font.source = b.dataset.src;
+    if (D.font.source === 'google' && (!D.font.family || D.font.family === 'Prompt')) D.font.family = 'Kanit';
+    if (D.font.source === 'custom') D.font.customFontId = S.fonts.find((f) => /\.(ttf|otf)$/i.test(f.file))?.id || null;
+    designChanged(true);
+  };
+  $('#d-gfont').addEventListener('change', (e) => { D.font.family = e.target.value.trim() || 'Prompt'; designChanged(); });
+  $('#d-cfont').addEventListener('change', (e) => { D.font.customFontId = e.target.value || null; designChanged(); });
+  $('#d-buttons').addEventListener('input', (e) => {
+    const row = e.target.closest('[data-i]'); const k = e.target.dataset.b; if (!row || !k) return;
+    D.buttons[+row.dataset.i][k] = e.target.value;
+    designChanged(k === 'action');
+  });
+  async function uploadDesignImage(input, key) {
+    const file = input.files[0]; if (!file) return;
+    try {
+      const fd = new FormData(); fd.append('image', file);
+      const r = await api('/api/richmenu/image', { method: 'POST', body: fd });
+      D[key] = r.file;
+      designChanged(true);
+      toast('อัปโหลดรูปแล้ว · กด “บันทึกการออกแบบ” เพื่อใช้งาน', 'ok');
+    } catch (er) { toast(er.message, 'err'); }
+    input.value = '';
+  }
+  $('#d-logo-file').onchange = (e) => uploadDesignImage(e.target, 'logoFile');
+  $('#d-bg-file').onchange = (e) => uploadDesignImage(e.target, 'bgFile');
+  $('#d-logo-del').onclick = () => { D.logoFile = null; designChanged(true); };
+  $('#d-bg-del').onclick = () => { D.bgFile = null; designChanged(true); };
+  $('#d-save').onclick = () => busy($('#d-save'), async () => {
+    const r = await api('/api/richmenu/design', { method: 'PUT', body: { design: D } });
+    D = r.design;
+    renderDesigner();
+    toast(S.settings.richMenu?.enabled ? 'บันทึกแล้ว · ระบบกำลังอัปเดตริชเมนูใน LINE ✨' : 'บันทึกแล้ว · เปิดใช้ริชเมนูรายวันเพื่อส่งขึ้น LINE', 'ok');
+  });
+  $('#d-reset').onclick = () => {
+    if (!confirm('คืนค่าการออกแบบเป็นค่าเริ่มต้น? (ยังไม่บันทึกจนกว่าจะกด “บันทึกการออกแบบ”)')) return;
+    D = { layout: 'grid6', colorMode: 'day', colors: { ...D_PRESETS[0] }, font: { source: 'bundled', family: 'Prompt', customFontId: null }, title: '', logoFile: null, bgFile: null, bgOverlay: 0.45, radius: 44, showTitle: true, showCalendar: true, showGroup: true, showStrip: true, showIcons: true, buttons: ['today', 'tomorrow', 'next', 'week', 'holiday', 'me'].map((a) => ({ action: a, label: '', sub: '', url: '' })) };
+    designChanged(true);
+  };
 
   // ---------------- Login / boot ----------------
   function showLogin() { $('#login').classList.remove('hidden'); }

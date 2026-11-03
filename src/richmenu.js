@@ -1,26 +1,106 @@
 'use strict';
-// ริชเมนูรายวัน: สร้างรูปใหม่ทุกวันตามชั้น/ห้อง สีตามวัน มีวันที่ ชื่อวัน และแจ้ง "พรุ่งนี้หยุด"
+// ริชเมนูรายวัน: สร้างรูปใหม่ทุกวันตามชั้น/ห้อง พร้อมวันที่ ชื่อวัน และแจ้ง "พรุ่งนี้หยุด"
+// แอดมินออกแบบได้: รูปแบบ (layout) สี รูปโลโก้/พื้นหลัง ฟอนต์ และปุ่ม
+const fs = require('fs');
 const path = require('path');
 const { Resvg } = require('@resvg/resvg-js');
+const jpeg = require('jpeg-js');
 const line = require('./line');
 const cal = require('./calendar');
+const store = require('./store');
 const { DAY_NAMES, localParts, dateKey, toMin } = require('./time');
 
-const W = 2500, H = 1686;
-const HEADER = 560, STRIP = 150, GRID_TOP = HEADER + STRIP;
+const W = 2500;
 const FONT_DIR = path.join(__dirname, '..', 'assets', 'fonts');
-const FONTS = ['Prompt-Regular.ttf', 'Prompt-SemiBold.ttf', 'Prompt-Bold.ttf'].map((f) => path.join(FONT_DIR, f));
+const BUNDLED = ['Prompt-Regular.ttf', 'Prompt-SemiBold.ttf', 'Prompt-Bold.ttf'].map((f) => path.join(FONT_DIR, f));
 const DEFAULT_KEY = '_default';
+const MAX_BYTES = 1024 * 1024;
 
-const BUTTONS = [
-  { label: 'ตารางวันนี้', text: 'ตารางวันนี้', icon: 'today' },
-  { label: 'ตารางพรุ่งนี้', text: 'ตารางพรุ่งนี้', icon: 'tomorrow' },
-  { label: 'คาบถัดไป', text: 'คาบถัดไป', icon: 'next' },
-  { label: 'ทั้งสัปดาห์', text: 'ตารางทั้งสัปดาห์', icon: 'week' },
-  { label: 'วันหยุด', text: 'วันหยุด', icon: 'flag' },
-  { label: 'ห้องของฉัน', text: 'ห้องของฉัน', icon: 'me' },
-];
+// ---------------- ปุ่มที่เลือกได้ ----------------
+const ACTIONS = {
+  today: { label: 'ตารางวันนี้', text: 'ตารางวันนี้', icon: 'today' },
+  tomorrow: { label: 'ตารางพรุ่งนี้', text: 'ตารางพรุ่งนี้', icon: 'tomorrow' },
+  next: { label: 'คาบถัดไป', text: 'คาบถัดไป', icon: 'next' },
+  week: { label: 'ทั้งสัปดาห์', text: 'ตารางทั้งสัปดาห์', icon: 'week' },
+  holiday: { label: 'วันหยุด', text: 'วันหยุด', icon: 'flag' },
+  me: { label: 'ห้องของฉัน', text: 'ห้องของฉัน', icon: 'me' },
+  code: { label: 'รหัสสมาชิก', text: 'รหัส', icon: 'key' },
+  link: { label: 'เว็บไซต์', text: '', icon: 'link' },
+};
 
+// ---------------- รูปแบบ (layout) ----------------
+const LAYOUTS = {
+  grid6: { name: 'ใหญ่ · 6 ปุ่ม', h: 1686, slots: 6 },
+  grid4: { name: 'ใหญ่ · 4 ปุ่ม', h: 1686, slots: 4 },
+  compact3: { name: 'ครึ่งจอ · 3 ปุ่ม', h: 843, slots: 3 },
+  banner4: { name: 'ครึ่งจอ · หัวซ้าย 4 ปุ่ม', h: 843, slots: 4 },
+};
+
+const DEFAULT_DESIGN = () => ({
+  layout: 'grid6',
+  colorMode: 'day', // day = สีตามวันแบบไทย, custom = สีที่ตั้งเอง
+  colors: { header: '#4f46e5', headerText: '#ffffff', accent: '#4f46e5', page: '#f3f4f8', button: '#ffffff', buttonText: '#1e2235', subText: '#6b7290' },
+  font: { source: 'bundled', family: 'Prompt', customFontId: null },
+  title: '',
+  logoFile: null,
+  bgFile: null,
+  bgOverlay: 0.45,
+  radius: 44,
+  showTitle: true,
+  showCalendar: true,
+  showGroup: true,
+  showStrip: true,
+  showIcons: true,
+  buttons: [
+    { action: 'today', label: '' }, { action: 'tomorrow', label: '' }, { action: 'next', label: '' },
+    { action: 'week', label: '' }, { action: 'holiday', label: '' }, { action: 'me', label: '' },
+  ],
+});
+
+const HEX = /^#[0-9a-f]{6}$/i;
+const clamp = (v, a, b, d) => (Number.isFinite(+v) ? Math.min(b, Math.max(a, +v)) : d);
+
+/** ตรวจและเติมค่าการออกแบบให้ครบ (ใช้ทั้งตอนบันทึกและตอนวาด) */
+function normalizeDesign(input) {
+  const d = DEFAULT_DESIGN();
+  const x = input && typeof input === 'object' ? input : {};
+  const colors = { ...d.colors };
+  for (const k of Object.keys(colors)) if (HEX.test(x.colors?.[k] || '')) colors[k] = x.colors[k];
+  const font = { ...d.font };
+  if (['bundled', 'google', 'custom'].includes(x.font?.source)) font.source = x.font.source;
+  if (typeof x.font?.family === 'string' && x.font.family.trim()) font.family = x.font.family.trim().replace(/[^\p{L}\p{N} ]/gu, '').slice(0, 60) || 'Prompt';
+  if (typeof x.font?.customFontId === 'string') font.customFontId = x.font.customFontId;
+  if (font.source === 'bundled') font.family = 'Prompt';
+  const layout = LAYOUTS[x.layout] ? x.layout : d.layout;
+  const slots = LAYOUTS[layout].slots;
+  const src = Array.isArray(x.buttons) ? x.buttons : d.buttons;
+  const buttons = [];
+  for (let i = 0; i < slots; i++) {
+    const b = src[i] || d.buttons[i] || { action: 'today' };
+    const action = ACTIONS[b.action] ? b.action : 'today';
+    const url = typeof b.url === 'string' && /^https:\/\/\S+$/i.test(b.url.trim()) ? b.url.trim().slice(0, 1000) : '';
+    buttons.push({ action: action === 'link' && !url ? 'today' : action, label: String(b.label || '').trim().slice(0, 20), sub: String(b.sub || '').trim().slice(0, 40), url });
+  }
+  const file = (f) => (typeof f === 'string' && /^img-[a-z0-9]+\.(png|jpe?g)$/i.test(f) ? f : null);
+  return {
+    layout,
+    colorMode: x.colorMode === 'custom' ? 'custom' : 'day',
+    colors, font,
+    title: String(x.title ?? '').trim().slice(0, 60),
+    logoFile: file(x.logoFile),
+    bgFile: file(x.bgFile),
+    bgOverlay: clamp(x.bgOverlay, 0, 1, d.bgOverlay),
+    radius: Math.round(clamp(x.radius, 0, 90, d.radius)),
+    showTitle: x.showTitle !== false,
+    showCalendar: x.showCalendar !== false,
+    showGroup: x.showGroup !== false,
+    showStrip: x.showStrip !== false,
+    showIcons: x.showIcons !== false,
+    buttons,
+  };
+}
+
+// ---------------- ตัวช่วยวาด ----------------
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' }[c]));
 // ประมาณความกว้างข้อความ (สระบน-ล่าง/วรรณยุกต์ไทยไม่กินที่)
 function textWidth(s, size) {
@@ -29,6 +109,7 @@ function textWidth(s, size) {
 }
 function fit(s, size, max) {
   let t = String(s);
+  if (max <= 0) return '';
   while (t.length > 1 && textWidth(t, size) > max) t = t.slice(0, -1);
   return t === String(s) ? t : t.slice(0, -1) + '…';
 }
@@ -37,24 +118,100 @@ function mix(hex, ratio, to = 255) {
   const f = (v) => Math.round(v + (to - v) * ratio);
   return '#' + [(n >> 16) & 255, (n >> 8) & 255, n & 255].map((v) => f(v).toString(16).padStart(2, '0')).join('');
 }
-
+function luminance(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  return (0.299 * ((n >> 16) & 255) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255)) / 255;
+}
 function shortDate(key) {
   const d = cal.parseKey(key);
   return `${d.getUTCDate()} ${cal.MONTHS_SHORT[d.getUTCMonth()]}`;
 }
 
-function icon(kind, cx, cy, color) {
-  const s = `stroke="${color}" stroke-width="12" fill="none" stroke-linecap="round" stroke-linejoin="round"`;
+function icon(kind, cx, cy, color, k = 1) {
+  const s = `stroke="${color}" stroke-width="${12 * k}" fill="none" stroke-linecap="round" stroke-linejoin="round"`;
+  const p = (n) => n * k;
   switch (kind) {
-    case 'today': return `<rect x="${cx - 44}" y="${cy - 36}" width="88" height="80" rx="12" ${s}/><path d="M${cx - 44} ${cy - 10}h88M${cx - 22} ${cy - 52}v28M${cx + 22} ${cy - 52}v28" ${s}/><circle cx="${cx}" cy="${cy + 16}" r="9" fill="${color}"/>`;
-    case 'tomorrow': return `<circle cx="${cx}" cy="${cy}" r="46" ${s}/><path d="M${cx} ${cy - 24}v26l18 14" ${s}/>`;
-    case 'next': return `<path d="M${cx - 40} ${cy}h70M${cx + 6} ${cy - 30}l30 30-30 30" ${s}/>`;
-    case 'week': return [-30, 0, 30].flatMap((dy) => [-30, 0, 30].map((dx) => `<rect x="${cx + dx - 11}" y="${cy + dy - 11}" width="22" height="22" rx="5" fill="${color}"/>`)).join('');
-    case 'flag': return `<path d="M${cx - 32} ${cy + 50}v-100M${cx - 32} ${cy - 46}h62l-14 26 14 26h-62" ${s}/>`;
-    default: return `<circle cx="${cx}" cy="${cy - 18}" r="22" ${s}/><path d="M${cx - 42} ${cy + 46}c6-30 24-42 42-42s36 12 42 42" ${s}/>`;
+    case 'today': return `<rect x="${cx - p(44)}" y="${cy - p(36)}" width="${p(88)}" height="${p(80)}" rx="${p(12)}" ${s}/><path d="M${cx - p(44)} ${cy - p(10)}h${p(88)}M${cx - p(22)} ${cy - p(52)}v${p(28)}M${cx + p(22)} ${cy - p(52)}v${p(28)}" ${s}/><circle cx="${cx}" cy="${cy + p(16)}" r="${p(9)}" fill="${color}"/>`;
+    case 'tomorrow': return `<circle cx="${cx}" cy="${cy}" r="${p(46)}" ${s}/><path d="M${cx} ${cy - p(24)}v${p(26)}l${p(18)} ${p(14)}" ${s}/>`;
+    case 'next': return `<path d="M${cx - p(40)} ${cy}h${p(70)}M${cx + p(6)} ${cy - p(30)}l${p(30)} ${p(30)}-${p(30)} ${p(30)}" ${s}/>`;
+    case 'week': return [-30, 0, 30].flatMap((dy) => [-30, 0, 30].map((dx) => `<rect x="${cx + p(dx - 11)}" y="${cy + p(dy - 11)}" width="${p(22)}" height="${p(22)}" rx="${p(5)}" fill="${color}"/>`)).join('');
+    case 'flag': return `<path d="M${cx - p(32)} ${cy + p(50)}v-${p(100)}M${cx - p(32)} ${cy - p(46)}h${p(62)}l-${p(14)} ${p(26)} ${p(14)} ${p(26)}h-${p(62)}" ${s}/>`;
+    case 'key': return `<circle cx="${cx - p(18)}" cy="${cy}" r="${p(26)}" ${s}/><path d="M${cx + p(8)} ${cy}h${p(44)}M${cx + p(36)} ${cy}v${p(22)}M${cx + p(50)} ${cy}v${p(16)}" ${s}/>`;
+    case 'link': return `<path d="M${cx - p(6)} ${cy + p(14)}l${p(20)}-${p(20)}M${cx - p(14)} ${cy - p(6)}l-${p(14)} ${p(14)}a${p(20)} ${p(20)} 0 0 0 ${p(28)} ${p(28)}l${p(14)}-${p(14)}M${cx + p(14)} ${cy + p(6)}l${p(14)}-${p(14)}a${p(20)} ${p(20)} 0 0 0-${p(28)}-${p(28)}l-${p(14)} ${p(14)}" ${s}/>`;
+    default: return `<circle cx="${cx}" cy="${cy - p(18)}" r="${p(22)}" ${s}/><path d="M${cx - p(42)} ${cy + p(46)}c${p(6)}-${p(30)} ${p(24)}-${p(42)} ${p(42)}-${p(42)}s${p(36)} ${p(12)} ${p(42)} ${p(42)}" ${s}/>`;
   }
 }
 
+// ---------------- รูปภาพ (โลโก้/พื้นหลัง) ----------------
+const imgCache = new Map();
+function imageDataUri(file) {
+  if (!file) return null;
+  if (imgCache.has(file)) return imgCache.get(file);
+  const p = path.join(store.FONT_DIR, path.basename(file));
+  if (!fs.existsSync(p)) return null;
+  const mime = /\.png$/i.test(file) ? 'image/png' : 'image/jpeg';
+  const uri = `data:${mime};base64,${fs.readFileSync(p).toString('base64')}`;
+  imgCache.set(file, uri);
+  return uri;
+}
+function forgetImage(file) { imgCache.delete(file); }
+
+// ---------------- ฟอนต์ ----------------
+const googleFontFiles = new Map(); // family -> [paths]
+/** ดาวน์โหลดไฟล์ TTF ของ Google Font มาเก็บไว้ (ครั้งเดียว) */
+async function ensureGoogleFont(family) {
+  if (googleFontFiles.has(family)) return googleFontFiles.get(family);
+  const slug = family.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+  const local = fs.readdirSync(store.FONT_DIR).filter((f) => f.startsWith(`gf-${slug}-`) && f.endsWith('.ttf'));
+  if (local.length) {
+    const files = local.map((f) => path.join(store.FONT_DIR, f));
+    googleFontFiles.set(family, files);
+    return files;
+  }
+  const fam = encodeURIComponent(family).replace(/%20/g, '+');
+  let css = '';
+  for (const q of [`family=${fam}:wght@400;600;700`, `family=${fam}:wght@400;700`, `family=${fam}`]) {
+    // User-Agent แบบง่ายทำให้ Google ส่งไฟล์ .ttf (ไลบรารีวาดรูปไม่รองรับ woff2)
+    const res = await fetch(`https://fonts.googleapis.com/css2?${q}`, { headers: { 'User-Agent': 'curl/8' }, signal: AbortSignal.timeout(15000) });
+    if (res.ok) { css = await res.text(); break; }
+  }
+  if (!css) throw new Error(`ไม่พบฟอนต์ "${family}" ใน Google Fonts`);
+  const faces = [...css.matchAll(/font-weight:\s*(\d+);[\s\S]*?src:\s*url\(([^)]+\.ttf)\)/g)];
+  if (!faces.length) throw new Error(`ดาวน์โหลดฟอนต์ "${family}" ไม่ได้`);
+  const files = [];
+  for (const [, weight, url] of faces) {
+    const res = await fetch(url, { signal: AbortSignal.timeout(20000) });
+    if (!res.ok) continue;
+    const file = `gf-${slug}-${weight}.ttf`;
+    fs.writeFileSync(path.join(store.FONT_DIR, file), Buffer.from(await res.arrayBuffer()));
+    await store.persistFont(file).catch(() => {});
+    files.push(path.join(store.FONT_DIR, file));
+  }
+  if (!files.length) throw new Error(`ดาวน์โหลดฟอนต์ "${family}" ไม่ได้`);
+  googleFontFiles.set(family, files);
+  return files;
+}
+
+/** หาฟอนต์ที่ใช้วาด: คืน { family, files } (Prompt อยู่ท้ายเสมอเพื่อรองรับภาษาไทย) */
+async function resolveFont(db, design) {
+  const f = design.font;
+  try {
+    if (f.source === 'google' && f.family) return { family: f.family, files: [...await ensureGoogleFont(f.family), ...BUNDLED] };
+    if (f.source === 'custom' && f.customFontId) {
+      const font = (db.fonts || []).find((x) => x.id === f.customFontId);
+      if (font && /\.(ttf|otf)$/i.test(font.file)) {
+        const p = path.join(store.FONT_DIR, font.file);
+        if (fs.existsSync(p)) return { family: font.family, files: [p, ...BUNDLED] };
+      }
+      throw new Error('ฟอนต์ที่เลือกใช้กับริชเมนูไม่ได้ (ต้องเป็นไฟล์ .ttf หรือ .otf)');
+    }
+  } catch (e) {
+    return { family: 'Prompt', files: BUNDLED, warning: e.message };
+  }
+  return { family: 'Prompt', files: BUNDLED };
+}
+
+// ---------------- ข้อมูลของเมนู ----------------
 /** ข้อมูลที่ใช้วาดเมนูของชั้น/ห้องหนึ่งในวันหนึ่ง */
 function menuInfo(db, groupId, todayKey) {
   const weekday = cal.weekdayOf(todayKey);
@@ -70,94 +227,224 @@ function menuInfo(db, groupId, todayKey) {
     specialToday: cal.specialOn(db, todayKey),
     specialTomorrow: cal.specialOn(db, tomorrowKey),
     today, tomorrow, nextSpecial,
-    title: db.settings.schoolName || db.settings.appName || 'ตารางสอน',
   };
 }
 
-function buildSvg(db, groupId, todayKey) {
-  const i = menuInfo(db, groupId, todayKey);
-  const bg = cal.DAY_COLORS[i.weekday], fg = cal.DAY_TEXT[i.weekday];
-  const dark = mix(bg, 0.35, 0);
-  const d = cal.parseKey(todayKey);
-  const out = [];
-  out.push(`<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" font-family="Prompt">`);
-  out.push(`<rect width="${W}" height="${H}" fill="#f3f4f8"/>`);
-  // ส่วนหัว: สีประจำวัน
-  out.push(`<rect width="${W}" height="${HEADER}" fill="${bg}"/>`);
-  out.push(`<circle cx="${W - 160}" cy="-60" r="420" fill="#ffffff" opacity="0.12"/><circle cx="1500" cy="${HEADER + 120}" r="260" fill="#ffffff" opacity="0.08"/>`);
-  out.push(`<text x="120" y="150" font-size="62" font-weight="600" fill="${fg}" opacity="0.85">${esc(fit(i.title, 62, 1250))}</text>`);
-  out.push(`<text x="112" y="325" font-size="180" font-weight="700" fill="${fg}">วัน${DAY_NAMES[i.weekday]}</text>`);
-  out.push(`<text x="120" y="478" font-size="86" font-weight="400" fill="${fg}">${esc(cal.thaiDate(todayKey))}</text>`);
-  // ป้ายชั้น/ห้อง
-  const gname = i.group ? i.group.name : 'ทุกชั้นเรียน';
-  const gsize = 84, gw = Math.min(760, textWidth(gname, gsize) + 110);
-  out.push(`<rect x="${1910 - gw}" y="96" width="${gw}" height="140" rx="70" fill="#ffffff" opacity="0.94"/>`);
-  out.push(`<text x="${1910 - gw / 2}" y="194" font-size="${gsize}" font-weight="700" fill="${dark}" text-anchor="middle">${esc(fit(gname, gsize, gw - 70))}</text>`);
-  // ปฏิทินเล็ก
-  out.push(`<rect x="1990" y="96" width="390" height="390" rx="56" fill="#ffffff"/>`);
-  out.push(`<path d="M1990 152a56 56 0 0 1 56-56h278a56 56 0 0 1 56 56v58h-390z" fill="${dark}"/>`);
-  out.push(`<text x="2185" y="190" font-size="62" font-weight="600" fill="#ffffff" text-anchor="middle">${cal.MONTHS_SHORT[d.getUTCMonth()]} ${d.getUTCFullYear() + 543}</text>`);
-  out.push(`<text x="2185" y="430" font-size="220" font-weight="700" fill="${dark}" text-anchor="middle">${d.getUTCDate()}</text>`);
-
-  // แถบแจ้งเตือน
-  let stripBg = '#ffffff', stripFg = '#1e2235', msg;
+function stripMessage(db, i) {
   if (i.specialToday) {
     const t = cal.typeInfo(i.specialToday.type);
     const reopen = cal.nextSchoolDay(db, i.specialToday.end);
-    stripBg = t.color; stripFg = '#ffffff';
-    msg = `${i.specialToday.suspendClasses !== false ? 'วันนี้หยุดเรียน' : `วันนี้${t.label}`}: ${i.specialToday.name}${reopen && i.specialToday.suspendClasses !== false ? ` · เปิดเรียน ${cal.thaiDate(reopen, { short: true })}` : ''}`;
-  } else if (i.specialTomorrow) {
-    const t = cal.typeInfo(i.specialTomorrow.type);
-    stripBg = t.color; stripFg = '#ffffff';
-    msg = `${i.specialTomorrow.suspendClasses !== false ? 'พรุ่งนี้หยุด' : `พรุ่งนี้${t.label}`}: ${i.specialTomorrow.name} (${cal.thaiRange(i.specialTomorrow.start, i.specialTomorrow.end)})`;
-  } else {
-    msg = i.today.length ? `วันนี้มี ${i.today.length} คาบ · เริ่ม ${i.today[0].start} น. · เลิก ${i.today[i.today.length - 1].end} น.` : 'วันนี้ไม่มีคาบเรียน';
+    const off = i.specialToday.suspendClasses !== false;
+    return { color: t.color, text: `${off ? 'วันนี้หยุดเรียน' : `วันนี้${t.label}`}: ${i.specialToday.name}${reopen && off ? ` · เปิดเรียน ${cal.thaiDate(reopen, { short: true })}` : ''}` };
   }
-  out.push(`<rect y="${HEADER}" width="${W}" height="${STRIP}" fill="${stripBg}"/>`);
-  out.push(`<circle cx="150" cy="${HEADER + STRIP / 2}" r="26" fill="${stripBg === '#ffffff' ? bg : '#ffffff'}"/>`);
-  out.push(`<text x="210" y="${HEADER + STRIP / 2 + 26}" font-size="70" font-weight="600" fill="${stripFg}">${esc(fit(msg, 70, W - 300))}</text>`);
+  if (i.specialTomorrow) {
+    const t = cal.typeInfo(i.specialTomorrow.type);
+    const off = i.specialTomorrow.suspendClasses !== false;
+    return { color: t.color, text: `${off ? 'พรุ่งนี้หยุด' : `พรุ่งนี้${t.label}`}: ${i.specialTomorrow.name} (${cal.thaiRange(i.specialTomorrow.start, i.specialTomorrow.end)})` };
+  }
+  return { color: null, text: i.today.length ? `วันนี้มี ${i.today.length} คาบ · เริ่ม ${i.today[0].start} น. · เลิก ${i.today[i.today.length - 1].end} น.` : 'วันนี้ไม่มีคาบเรียน' };
+}
 
-  // ปุ่ม 2 แถว × 3 คอลัมน์
-  const subs = [
-    i.specialToday && i.specialToday.suspendClasses !== false ? 'วันนี้หยุด' : i.today.length ? `${i.today.length} คาบ` : 'ไม่มีคาบเรียน',
-    i.specialTomorrow && i.specialTomorrow.suspendClasses !== false ? 'พรุ่งนี้หยุด' : `${shortDate(i.tomorrowKey)} · ${i.tomorrow.length ? `${i.tomorrow.length} คาบ` : 'ไม่มีคาบ'}`,
-    'พร้อมปุ่มนำทาง',
-    'ดูทุกวัน',
-    i.nextSpecial ? `${shortDate(i.nextSpecial.start)} ${i.nextSpecial.name}` : 'และวันกิจกรรม',
-    i.group ? i.group.name : 'ยังไม่ระบุห้อง',
-  ];
-  const pad = 40, gap = 28, cw = (W - pad * 2 - gap * 2) / 3, ch = (H - GRID_TOP - pad * 2 - gap) / 2;
-  const iconBg = mix(bg, 0.82), iconFg = i.weekday === 1 ? '#8a6d00' : bg;
-  BUTTONS.forEach((b, k) => {
-    const x = pad + (k % 3) * (cw + gap), y = GRID_TOP + pad + Math.floor(k / 3) * (ch + gap);
-    out.push(`<rect x="${x}" y="${y}" width="${cw}" height="${ch}" rx="44" fill="#ffffff"/>`);
-    out.push(`<circle cx="${x + 150}" cy="${y + ch / 2}" r="92" fill="${iconBg}"/>`);
-    out.push(icon(b.icon, x + 150, y + ch / 2, iconFg));
-    out.push(`<text x="${x + 285}" y="${y + ch / 2 - 4}" font-size="76" font-weight="700" fill="#1e2235">${esc(fit(b.label, 76, cw - 320))}</text>`);
-    out.push(`<text x="${x + 287}" y="${y + ch / 2 + 74}" font-size="46" font-weight="400" fill="#6b7290">${esc(fit(subs[k], 46, cw - 320))}</text>`);
+function buttonText(b, i) {
+  const a = ACTIONS[b.action];
+  const def = {
+    today: i.specialToday && i.specialToday.suspendClasses !== false ? 'วันนี้หยุด' : i.today.length ? `${i.today.length} คาบ` : 'ไม่มีคาบเรียน',
+    tomorrow: i.specialTomorrow && i.specialTomorrow.suspendClasses !== false ? 'พรุ่งนี้หยุด' : `${shortDate(i.tomorrowKey)} · ${i.tomorrow.length ? `${i.tomorrow.length} คาบ` : 'ไม่มีคาบ'}`,
+    next: 'พร้อมปุ่มนำทาง',
+    week: 'ดูทุกวัน',
+    holiday: i.nextSpecial ? `${shortDate(i.nextSpecial.start)} ${i.nextSpecial.name}` : 'และวันกิจกรรม',
+    me: i.group ? i.group.name : 'แตะเพื่อดูรหัสสมาชิก',
+    code: 'แตะเพื่อดูรหัส 6 หลัก',
+    link: b.url ? b.url.replace(/^https:\/\//, '').replace(/\/$/, '') : '',
+  }[b.action];
+  // เมนูของคนที่ยังไม่เข้าห้อง: ปุ่ม "ห้องของฉัน" แสดงเป็น "รหัสสมาชิก"
+  const label = b.label || (b.action === 'me' && !i.group ? 'รหัสสมาชิก' : a.label);
+  return { label, sub: b.sub || def, icon: b.action === 'me' && !i.group ? 'key' : a.icon };
+}
+
+/** พื้นที่ของแต่ละส่วนตาม layout */
+function geometry(layout) {
+  const L = LAYOUTS[layout];
+  const H = L.h;
+  if (layout === 'compact3') {
+    const header = { x: 0, y: 0, w: W, h: 330 }, strip = { x: 0, y: 330, w: W, h: 100 };
+    const top = 430, pad = 30, gap = 24, cw = (W - pad * 2 - gap * 2) / 3, ch = H - top - pad * 2;
+    return { H, k: 330 / 560, header, strip, cells: [0, 1, 2].map((c) => ({ x: pad + c * (cw + gap), y: top + pad, w: cw, h: ch, area: { x: Math.round(c * W / 3), y: top, w: Math.round(W / 3), h: H - top } })) };
+  }
+  if (layout === 'banner4') {
+    const pw = 1020;
+    const header = { x: 0, y: 0, w: pw, h: H - 120 }, strip = { x: 0, y: H - 120, w: pw, h: 120 };
+    const pad = 30, gap = 24, cw = (W - pw - pad * 2 - gap) / 2, ch = (H - pad * 2 - gap) / 2;
+    const cells = [0, 1, 2, 3].map((k) => {
+      const c = k % 2, r = Math.floor(k / 2);
+      return { x: pw + pad + c * (cw + gap), y: pad + r * (ch + gap), w: cw, h: ch, area: { x: pw + Math.round(c * (W - pw) / 2), y: Math.round(r * H / 2), w: Math.round((W - pw) / 2), h: Math.round(H / 2) } };
+    });
+    return { H, k: 0.78, header, strip, cells, narrow: true };
+  }
+  const cols = layout === 'grid4' ? 2 : 3;
+  const header = { x: 0, y: 0, w: W, h: 560 }, strip = { x: 0, y: 560, w: W, h: 150 };
+  const top = 710, pad = 40, gap = 28, rows = 2;
+  const cw = (W - pad * 2 - gap * (cols - 1)) / cols, ch = (H - top - pad * 2 - gap) / rows;
+  const cells = [];
+  for (let k = 0; k < cols * rows; k++) {
+    const c = k % cols, r = Math.floor(k / cols);
+    cells.push({ x: pad + c * (cw + gap), y: top + pad + r * (ch + gap), w: cw, h: ch, area: { x: Math.round(c * W / cols), y: top + Math.round(r * (H - top) / 2), w: Math.round(W / cols), h: Math.round((H - top) / 2) } });
+  }
+  return { H, k: 1, header, strip, cells };
+}
+
+function themeColors(design, weekday) {
+  if (design.colorMode === 'custom') return { ...design.colors };
+  const bg = cal.DAY_COLORS[weekday];
+  return { header: bg, headerText: cal.DAY_TEXT[weekday], accent: weekday === 1 ? '#8a6d00' : bg, page: '#f3f4f8', button: '#ffffff', buttonText: '#1e2235', subText: '#6b7290' };
+}
+
+function buildSvg(db, groupId, todayKey, designIn, fontFamily = 'Prompt') {
+  const design = normalizeDesign(designIn || db.settings.richMenu?.design);
+  const i = menuInfo(db, groupId, todayKey);
+  const g = geometry(design.layout);
+  const c = themeColors(design, i.weekday);
+  const dark = luminance(c.header) > 0.6 ? mix(c.header, 0.55, 0) : mix(c.header, 0.35, 0);
+  const d = cal.parseKey(todayKey);
+  const ff = esc(fontFamily);
+  const R = design.radius;
+  const out = [];
+  out.push(`<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${W}" height="${g.H}" viewBox="0 0 ${W} ${g.H}" font-family="${ff}, Prompt">`);
+  out.push(`<rect width="${W}" height="${g.H}" fill="${c.page}"/>`);
+
+  // ---- ส่วนหัว ----
+  const h = g.header, k = g.k;
+  out.push(`<clipPath id="hc"><rect x="${h.x}" y="${h.y}" width="${h.w}" height="${h.h}"/></clipPath>`);
+  out.push(`<rect x="${h.x}" y="${h.y}" width="${h.w}" height="${h.h}" fill="${c.header}"/>`);
+  const bg = imageDataUri(design.bgFile);
+  if (bg) {
+    out.push(`<image clip-path="url(#hc)" x="${h.x}" y="${h.y}" width="${h.w}" height="${h.h}" preserveAspectRatio="xMidYMid slice" href="${bg}"/>`);
+    out.push(`<rect x="${h.x}" y="${h.y}" width="${h.w}" height="${h.h}" fill="${c.header}" opacity="${design.bgOverlay}"/>`);
+  } else {
+    out.push(`<g clip-path="url(#hc)"><circle cx="${h.x + h.w - 160 * k}" cy="${-60 * k}" r="${420 * k}" fill="#ffffff" opacity="0.12"/><circle cx="${h.x + h.w * 0.6}" cy="${h.y + h.h + 120 * k}" r="${260 * k}" fill="#ffffff" opacity="0.08"/></g>`);
+  }
+  let tx = h.x + 120 * k;
+  const logo = imageDataUri(design.logoFile);
+  if (logo) {
+    const ls = 150 * k;
+    out.push(`<image x="${tx}" y="${h.y + 60 * k}" width="${ls}" height="${ls}" preserveAspectRatio="xMidYMid meet" href="${logo}"/>`);
+    if (!g.narrow) tx += ls + 40 * k;
+  }
+  const rightReserve = (design.showCalendar && !g.narrow ? 520 : 0) + (design.showGroup && !g.narrow ? 640 : 0);
+  const textMax = h.w - (tx - h.x) - 80 * k - rightReserve * k;
+  const title = design.title || db.settings.schoolName || db.settings.appName || 'ตารางสอน';
+  const titleY = logo && g.narrow ? h.y + 280 * k : h.y + 150 * k;
+  const yShift = logo && g.narrow ? 150 * k : 0;
+  if (design.showTitle) out.push(`<text x="${tx}" y="${titleY}" font-size="${62 * k}" font-weight="600" fill="${c.headerText}" opacity="0.85">${esc(fit(title, 62 * k, g.narrow ? h.w - 200 * k : textMax))}</text>`);
+  const dayText = `วัน${DAY_NAMES[i.weekday]}`;
+  const daySize = Math.min(180 * k, (g.narrow ? h.w - 220 * k : textMax) / Math.max(1, textWidth(dayText, 1)));
+  out.push(`<text x="${tx - 8 * k}" y="${h.y + 325 * k + yShift}" font-size="${daySize}" font-weight="700" fill="${c.headerText}">${dayText}</text>`);
+  out.push(`<text x="${tx}" y="${h.y + 478 * k + yShift}" font-size="${86 * k}" font-weight="400" fill="${c.headerText}">${esc(cal.thaiDate(todayKey))}</text>`);
+  const gname = i.group ? i.group.name : 'ทุกชั้นเรียน';
+  if (design.showGroup) {
+    const gs = 84 * k;
+    const gw = Math.min(700 * k, textWidth(gname, gs) + 110 * k);
+    const gx = g.narrow ? tx : (design.showCalendar ? h.x + h.w - 550 * k - gw : h.x + h.w - 120 * k - gw);
+    const gy = g.narrow ? h.y + 560 * k + yShift : h.y + 96 * k;
+    if (!g.narrow || gy + 140 * k < h.y + h.h) {
+      out.push(`<rect x="${gx}" y="${gy}" width="${gw}" height="${140 * k}" rx="${70 * k}" fill="#ffffff" opacity="0.94"/>`);
+      out.push(`<text x="${gx + gw / 2}" y="${gy + 98 * k}" font-size="${gs}" font-weight="700" fill="${dark}" text-anchor="middle">${esc(fit(gname, gs, gw - 70 * k))}</text>`);
+    }
+  }
+  if (design.showCalendar && !g.narrow) {
+    const cx = h.x + h.w - 510 * k, cy = h.y + 96 * k, cs = 390 * k, cr = Math.min(56 * k, R);
+    out.push(`<rect x="${cx}" y="${cy}" width="${cs}" height="${cs}" rx="${cr}" fill="#ffffff"/>`);
+    out.push(`<path d="M${cx} ${cy + cr}a${cr} ${cr} 0 0 1 ${cr}-${cr}h${cs - 2 * cr}a${cr} ${cr} 0 0 1 ${cr} ${cr}v${114 * k - cr}h-${cs}z" fill="${dark}"/>`);
+    out.push(`<text x="${cx + cs / 2}" y="${cy + 94 * k}" font-size="${62 * k}" font-weight="600" fill="#ffffff" text-anchor="middle">${cal.MONTHS_SHORT[d.getUTCMonth()]} ${d.getUTCFullYear() + 543}</text>`);
+    out.push(`<text x="${cx + cs / 2}" y="${cy + 334 * k}" font-size="${220 * k}" font-weight="700" fill="${dark}" text-anchor="middle">${d.getUTCDate()}</text>`);
+  }
+
+  // ---- แถบแจ้งเตือน ----
+  const s = g.strip;
+  const msg = stripMessage(db, i);
+  if (design.showStrip || msg.color) {
+    const sb = msg.color || c.button, sf = msg.color ? '#ffffff' : c.buttonText;
+    const fsz = Math.min(70, s.h * 0.47);
+    out.push(`<rect x="${s.x}" y="${s.y}" width="${s.w}" height="${s.h}" fill="${sb}"/>`);
+    out.push(`<circle cx="${s.x + 80 + fsz * 0.3}" cy="${s.y + s.h / 2}" r="${fsz * 0.37}" fill="${msg.color ? '#ffffff' : c.accent}"/>`);
+    out.push(`<text x="${s.x + 140 + fsz * 0.3}" y="${s.y + s.h / 2 + fsz * 0.37}" font-size="${fsz}" font-weight="600" fill="${sf}">${esc(fit(msg.text, fsz, s.w - 200 - fsz))}</text>`);
+  } else {
+    out.push(`<rect x="${s.x}" y="${s.y}" width="${s.w}" height="${s.h}" fill="${c.page}"/>`);
+  }
+
+  // ---- ปุ่ม ----
+  const iconBg = mix(c.accent, 0.84);
+  g.cells.forEach((cell, n) => {
+    const b = design.buttons[n];
+    if (!b) return;
+    const t = buttonText(b, i);
+    const kc = Math.min(cell.h / 434, cell.w / 788);
+    out.push(`<rect x="${cell.x}" y="${cell.y}" width="${cell.w}" height="${cell.h}" rx="${Math.min(R, cell.h / 2)}" fill="${c.button}"/>`);
+    const vertical = cell.w < cell.h * 1.25; // ปุ่มแคบ: ไอคอนบน ข้อความล่าง
+    if (vertical) {
+      const cx = cell.x + cell.w / 2;
+      if (design.showIcons) {
+        out.push(`<circle cx="${cx}" cy="${cell.y + cell.h * 0.36}" r="${92 * kc}" fill="${iconBg}"/>`);
+        out.push(icon(t.icon, cx, cell.y + cell.h * 0.36, c.accent, kc));
+      }
+      const ly = design.showIcons ? cell.y + cell.h * 0.36 + 190 * kc : cell.y + cell.h / 2;
+      out.push(`<text x="${cx}" y="${ly}" font-size="${76 * kc}" font-weight="700" fill="${c.buttonText}" text-anchor="middle">${esc(fit(t.label, 76 * kc, cell.w - 60))}</text>`);
+      out.push(`<text x="${cx}" y="${ly + 70 * kc}" font-size="${46 * kc}" font-weight="400" fill="${c.subText}" text-anchor="middle">${esc(fit(t.sub, 46 * kc, cell.w - 60))}</text>`);
+    } else {
+      const ix = cell.x + 150 * kc;
+      const lx = design.showIcons ? cell.x + 285 * kc : cell.x + 80 * kc;
+      if (design.showIcons) {
+        out.push(`<circle cx="${ix}" cy="${cell.y + cell.h / 2}" r="${92 * kc}" fill="${iconBg}"/>`);
+        out.push(icon(t.icon, ix, cell.y + cell.h / 2, c.accent, kc));
+      }
+      const maxW = cell.x + cell.w - lx - 40 * kc;
+      out.push(`<text x="${lx}" y="${cell.y + cell.h / 2 - 4 * kc}" font-size="${76 * kc}" font-weight="700" fill="${c.buttonText}">${esc(fit(t.label, 76 * kc, maxW))}</text>`);
+      out.push(`<text x="${lx + 2}" y="${cell.y + cell.h / 2 + 74 * kc}" font-size="${46 * kc}" font-weight="400" fill="${c.subText}">${esc(fit(t.sub, 46 * kc, maxW))}</text>`);
+    }
   });
   out.push('</svg>');
   return out.join('');
 }
 
-function render(svg) {
-  return new Resvg(svg, { fitTo: { mode: 'original' }, font: { fontFiles: FONTS, loadSystemFonts: false, defaultFontFamily: 'Prompt' } }).render().asPng();
+/** วาดรูป: ใช้ PNG ถ้าไม่เกิน 1MB ไม่งั้นแปลงเป็น JPEG (LINE รับรูปริชเมนูไม่เกิน 1MB) */
+function render(svg, fontFiles = BUNDLED) {
+  const img = new Resvg(svg, { fitTo: { mode: 'original' }, font: { fontFiles, loadSystemFonts: false, defaultFontFamily: 'Prompt' } }).render();
+  const png = img.asPng();
+  if (png.length <= MAX_BYTES) return { data: png, contentType: 'image/png' };
+  for (const q of [90, 82, 72, 60]) {
+    const j = jpeg.encode({ data: img.pixels, width: img.width, height: img.height }, q).data;
+    if (j.length <= MAX_BYTES) return { data: Buffer.from(j), contentType: 'image/jpeg' };
+  }
+  throw new Error('รูปริชเมนูใหญ่เกิน 1MB แม้บีบอัดแล้ว ลองใช้รูปพื้นหลังที่เล็กลง');
 }
 
-function menuDefinition(db, groupId, todayKey) {
+async function renderMenu(db, groupId, key, designIn) {
+  const design = normalizeDesign(designIn || db.settings.richMenu?.design);
+  const font = await resolveFont(db, design);
+  const out = render(buildSvg(db, groupId, key, design, font.family), font.files);
+  return { ...out, warning: font.warning || null };
+}
+
+function menuDefinition(db, groupId, todayKey, designIn) {
+  const design = normalizeDesign(designIn || db.settings.richMenu?.design);
   const d = cal.parseKey(todayKey);
-  const group = db.groups.find((g) => g.id === groupId);
-  const cw = Math.floor(W / 3), rh = Math.floor((H - GRID_TOP) / 2);
-  const areas = [{ bounds: { x: 0, y: 0, width: W, height: GRID_TOP }, action: { type: 'message', label: 'ตารางวันนี้', text: 'ตารางวันนี้' } }];
-  BUTTONS.forEach((b, k) => {
-    const col = k % 3, rowI = Math.floor(k / 3);
-    areas.push({
-      bounds: { x: col * cw, y: GRID_TOP + rowI * rh, width: col === 2 ? W - 2 * cw : cw, height: rowI === 1 ? H - GRID_TOP - rh : rh },
-      action: { type: 'message', label: b.label.slice(0, 20), text: b.text },
-    });
+  const group = db.groups.find((x) => x.id === groupId);
+  const g = geometry(design.layout);
+  const i = { group };
+  const areas = [{ bounds: { x: g.header.x, y: 0, width: g.header.w, height: g.strip.y + g.strip.h }, action: { type: 'message', label: 'ตารางวันนี้', text: 'ตารางวันนี้' } }];
+  g.cells.forEach((cell, n) => {
+    const b = design.buttons[n];
+    if (!b) return;
+    const a = ACTIONS[b.action];
+    const label = (b.label || (b.action === 'me' && !i.group ? 'รหัสสมาชิก' : a.label)).slice(0, 20);
+    const action = b.action === 'link' && b.url
+      ? { type: 'uri', label, uri: b.url }
+      : { type: 'message', label, text: a.text };
+    const ar = cell.area;
+    areas.push({ bounds: { x: ar.x, y: ar.y, width: Math.min(ar.w, W - ar.x), height: Math.min(ar.h, g.H - ar.y) }, action });
   });
   return {
-    size: { width: W, height: H },
+    size: { width: W, height: g.H },
     selected: db.settings.richMenu?.selected !== false,
     name: `classroom ${todayKey} ${group ? group.name : 'default'}`.slice(0, 300),
     chatBarText: `เมนู ${d.getUTCDate()} ${cal.MONTHS_SHORT[d.getUTCMonth()]}`.slice(0, 14),
@@ -169,8 +456,8 @@ function todayKeyOf(db, now = new Date()) {
   return dateKey(localParts(now, db.settings.timezone || 'Asia/Bangkok'));
 }
 
-function preview(db, groupId, key) {
-  return render(buildSvg(db, groupId || null, key || todayKeyOf(db)));
+function preview(db, groupId, key, design) {
+  return renderMenu(db, groupId || null, key || todayKeyOf(db), design);
 }
 
 /** สร้างริชเมนูใหม่ของวันนี้ให้ทุกชั้น/ห้อง แล้วผูกกับผู้ใช้ และลบเมนูเก่า */
@@ -181,12 +468,13 @@ async function rebuild(db) {
   const targets = [null, ...db.groups.map((g) => g.id)];
   const created = {};
   try {
+    let warning = null;
     for (const gid of targets) {
-      const png = render(buildSvg(db, gid, key));
-      if (png.length > 1024 * 1024) throw new Error(`รูปริชเมนูใหญ่เกิน 1MB (${png.length} bytes)`);
+      const img = await renderMenu(db, gid, key);
+      warning = warning || img.warning;
       const { richMenuId } = await line.richMenu.create(settings, menuDefinition(db, gid, key));
       created[gid || DEFAULT_KEY] = richMenuId;
-      await line.richMenu.upload(settings, richMenuId, png);
+      await line.richMenu.upload(settings, richMenuId, img.data, img.contentType);
     }
     await line.richMenu.setDefault(settings, created[DEFAULT_KEY]);
     let linked = 0;
@@ -200,11 +488,12 @@ async function rebuild(db) {
     rm.builtFor = key;
     rm.builtAt = new Date().toISOString();
     rm.lastError = null;
+    rm.warning = warning;
     rm.failedAt = null;
     rm.dirtyAt = null;
     rm.linked = linked;
     console.log(`[richmenu] สร้างริชเมนู ${targets.length} ชุดของวันที่ ${key} และผูกผู้ใช้ ${linked} คน`);
-    return { menus: targets.length, linked, date: key };
+    return { menus: targets.length, linked, date: key, warning };
   } catch (e) {
     for (const id of Object.values(created)) { try { await line.richMenu.remove(settings, id); } catch { /* ignore */ } }
     rm.lastError = e.message;
@@ -232,4 +521,8 @@ async function removeAll(db) {
   rm.builtFor = null;
 }
 
-module.exports = { W, H, BUTTONS, buildSvg, render, preview, menuDefinition, menuInfo, rebuild, linkRecipient, removeAll, todayKeyOf, textWidth };
+module.exports = {
+  W, ACTIONS, LAYOUTS, DEFAULT_DESIGN, normalizeDesign, geometry,
+  buildSvg, render, renderMenu, preview, menuDefinition, menuInfo, rebuild, linkRecipient, removeAll, todayKeyOf, textWidth,
+  ensureGoogleFont, forgetImage,
+};

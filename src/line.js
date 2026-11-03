@@ -82,13 +82,13 @@ const broadcast = (settings, messages) => call(creds(settings).token, '/message/
 // ---------------- Rich menu ----------------
 const richMenu = {
   create: (settings, menu) => call(creds(settings).token, '/richmenu', menu),
-  async upload(settings, richMenuId, png) {
+  async upload(settings, richMenuId, png, contentType = 'image/png') {
     const token = creds(settings).token;
     if (!token) throw new Error('ยังไม่ได้ตั้งค่า Channel Access Token');
     let res;
     try {
       res = await fetch(`${DATA_API}/richmenu/${encodeURIComponent(richMenuId)}/content`, {
-        method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'image/png' }, body: png,
+        method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': contentType }, body: png,
         signal: AbortSignal.timeout(30000),
       });
     } catch (e) { throw new Error(`อัปโหลดรูปริชเมนูไม่ได้ (${e.cause?.code || e.name})`); }
@@ -377,7 +377,56 @@ function upcomingSpecialMessage(list, db, todayKey) {
   };
 }
 
+/** บัตรรหัสสมาชิก 6 หลัก */
+function memberCardMessage(r, group, db) {
+  const accent = hex(db.settings.accentColor);
+  const code = r.code || '------';
+  const joined = !!group;
+  const count = joined ? db.classes.filter((c) => c.groupId === group.id).length : 0;
+  const digits = [...code].map((d) => ({
+    type: 'box', layout: 'vertical', flex: 1, paddingTop: '10px', paddingBottom: '10px', cornerRadius: '10px', backgroundColor: tint(accent, 0.88),
+    contents: [{ type: 'text', text: d, size: 'xxl', weight: 'bold', color: accent, align: 'center' }],
+  }));
+  const status = joined
+    ? [
+      { type: 'text', text: `✅ อยู่ในชั้นเรียน ${trim(group.name, 40)}`, size: 'md', weight: 'bold', color: '#16a34a', wrap: true },
+      { type: 'text', text: `📚 ${count} คาบต่อสัปดาห์ · แจ้งเตือนและเมนูเป็นของห้องนี้`, size: 'xs', color: '#64748b', wrap: true },
+      ...(group.note ? [{ type: 'text', text: `📝 ${trim(group.note, 200)}`, size: 'xs', color: '#64748b', wrap: true }] : []),
+    ]
+    : [
+      { type: 'text', text: 'ยังไม่ได้เข้าชั้นเรียน', size: 'md', weight: 'bold', color: '#b45309' },
+      { type: 'text', text: 'แจ้งรหัส 6 หลักนี้กับครูประจำชั้นหรือผู้ดูแลระบบ เพื่อเพิ่มบัญชีนี้เข้าห้องเรียน แล้วเมนูและการแจ้งเตือนจะเปลี่ยนเป็นของห้องคุณอัตโนมัติ', size: 'xs', color: '#64748b', wrap: true },
+    ];
+  return {
+    type: 'flex',
+    altText: `รหัสสมาชิกของคุณ: ${code}${joined ? ` (${group.name})` : ''}`,
+    contents: {
+      type: 'bubble', size: 'mega',
+      header: {
+        type: 'box', layout: 'vertical', paddingAll: '18px', backgroundColor: accent, contents: [
+          { type: 'text', text: r.type === 'user' ? 'รหัสสมาชิกของคุณ' : 'รหัสสมาชิกของกลุ่มนี้', color: '#ffffff', weight: 'bold', size: 'lg' },
+          { type: 'text', text: trim(db.settings.schoolName || db.settings.appName || 'ตารางสอน', 60), color: '#ffffffcc', size: 'xs' },
+        ],
+      },
+      body: {
+        type: 'box', layout: 'vertical', paddingAll: '18px', spacing: 'lg', contents: [
+          { type: 'box', layout: 'horizontal', spacing: 'sm', contents: digits },
+          { type: 'separator', color: '#e2e8f0' },
+          { type: 'box', layout: 'vertical', spacing: 'sm', contents: status },
+        ],
+      },
+      footer: {
+        type: 'box', layout: 'vertical', paddingAll: '14px', paddingTop: '0px', contents: [
+          { type: 'button', style: 'secondary', height: 'sm', action: { type: 'clipboard', label: 'คัดลอกรหัส', clipboardText: code } },
+        ],
+      },
+      styles: { footer: { separator: false } },
+    },
+  };
+}
+
 module.exports = {
+  memberCardMessage,
   creds, call, verifySignature, send, reply, botInfo, profile, groupSummary, multicast, push, broadcast, richMenu,
   navUrl, classBubble, reminderMessage, dayScheduleMessage, dayScheduleBubble, weekScheduleMessage,
   specialDayMessage, upcomingSpecialMessage, minutesLabel,

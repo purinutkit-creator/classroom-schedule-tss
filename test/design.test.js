@@ -1,0 +1,129 @@
+'use strict';
+const test = require('node:test');
+const assert = require('node:assert');
+const os = require('os');
+const path = require('path');
+const fs = require('fs');
+
+process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'tt-design-'));
+delete process.env.DATABASE_URL;
+const store = require('../src/store');
+const members = require('../src/members');
+const richmenu = require('../src/richmenu');
+const line = require('../src/line');
+const jpeg = require('jpeg-js');
+
+const mkDb = () => ({
+  settings: { timezone: 'Asia/Bangkok', visibleDays: [1, 2, 3, 4, 5], schoolName: 'Thammasat Secondary School', appName: 'ตารางสอน', accentColor: '#4f46e5', richMenu: { enabled: true, menus: {} } },
+  groups: [{ id: 'g1', name: 'ม.4/1' }], rooms: [], fonts: [], sent: {}, history: [],
+  classes: [{ id: 'c1', groupId: 'g1', subject: 'คณิต', day: 2, start: '08:30', end: '09:20' }],
+  recipients: [{ id: 'U' + 'a'.repeat(32), type: 'user' }, { id: 'U' + 'b'.repeat(32), type: 'user', code: '123456' }],
+  specialDays: [{ id: 's1', name: 'วันลอยกระทง', type: 'holiday', start: '2026-11-24', end: '2026-11-24', suspendClasses: true }],
+});
+
+test('รหัสสมาชิก 6 หลัก: ไม่ซ้ำ เติมให้บัญชีเดิม และค้นหาได้', () => {
+  const db = mkDb();
+  assert.equal(members.ensureCodes(db), 1);
+  assert.match(db.recipients[0].code, /^\d{6}$/);
+  assert.equal(db.recipients[1].code, '123456', 'รหัสเดิมไม่เปลี่ยน');
+  assert.notEqual(db.recipients[0].code, '123456');
+  assert.equal(members.findByCode(db, '123 456').id, 'U' + 'b'.repeat(32));
+  assert.equal(members.findByCode(db, '12345'), null);
+  const codes = new Set();
+  const big = { recipients: [] };
+  for (let i = 0; i < 2000; i++) { const c = members.genCode(big); big.recipients.push({ code: c }); codes.add(c); }
+  assert.equal(codes.size, 2000);
+});
+
+test('บัตรรหัสสมาชิกใน LINE: ยังไม่เข้าห้อง / เข้าห้องแล้ว', () => {
+  const db = mkDb();
+  const r = db.recipients[1];
+  const card = line.memberCardMessage(r, null, db);
+  assert.match(card.altText, /123456/);
+  assert.match(JSON.stringify(card), /ยังไม่ได้เข้าชั้นเรียน/);
+  assert.equal(card.contents.footer.contents[0].action.type, 'clipboard');
+  assert.equal(card.contents.footer.contents[0].action.clipboardText, '123456');
+  assert.match(JSON.stringify(line.memberCardMessage(r, db.groups[0], db)), /อยู่ในชั้นเรียน ม\.4\/1/);
+});
+
+test('เพิ่มบัญชีเข้าห้องด้วยรหัส (API)', async () => {
+  await store.init();
+  const app = require('../server');
+  const db = store.db;
+  db.groups.push({ id: 'gx', name: 'ม.6/2' });
+  db.recipients.push({ id: 'U' + 'c'.repeat(32), type: 'user', name: 'นักเรียน', enabled: true, code: '654321' });
+  const server = app.listen(0);
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const post = (body) => fetch(base + '/api/members/assign', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  try {
+    const ok = await post({ code: '654321', groupId: 'gx' });
+    assert.equal(ok.status, 200);
+    assert.equal((await ok.json()).group, 'ม.6/2');
+    assert.equal(db.recipients.find((r) => r.code === '654321').groupId, 'gx');
+    assert.equal((await post({ code: '000000', groupId: 'gx' })).status, 404);
+    assert.equal((await post({ code: '12', groupId: 'gx' })).status, 400);
+    assert.equal((await post({ code: '654321', groupId: 'nope' })).status, 400);
+    const reply = app.locals.keywordReply(db, 'รหัส', db.recipients.find((r) => r.code === '654321'));
+    assert.match(JSON.stringify(reply), /654321/);
+    assert.match(JSON.stringify(reply), /ม\.6\/2/);
+  } finally { server.close(); }
+});
+
+test('การออกแบบ: ค่าที่ผิดถูกแก้ให้ถูก และจำนวนปุ่มตามรูปแบบ', () => {
+  const d = richmenu.normalizeDesign({ layout: 'grid4', colorMode: 'custom', colors: { header: 'red', accent: '#123456' }, radius: 999, buttons: [{ action: 'link', url: 'javascript:x' }, { action: 'link', url: 'https://school.ac.th' }, { action: 'nope' }] });
+  assert.equal(d.buttons.length, 4);
+  assert.equal(d.buttons[0].action, 'today', 'ลิงก์ที่ไม่ใช่ https ใช้ไม่ได้');
+  assert.equal(d.buttons[1].url, 'https://school.ac.th');
+  assert.equal(d.buttons[2].action, 'today');
+  assert.equal(d.colors.header, '#4f46e5');
+  assert.equal(d.colors.accent, '#123456');
+  assert.equal(d.radius, 90);
+  assert.equal(richmenu.normalizeDesign({ layout: 'compact3' }).buttons.length, 3);
+});
+
+test('ทุกรูปแบบ: ขนาดรูป พื้นที่กด และลิงก์ถูกต้อง', async () => {
+  const db = mkDb();
+  for (const layout of Object.keys(richmenu.LAYOUTS)) {
+    const design = { layout, buttons: [{ action: 'today' }, { action: 'link', url: 'https://school.ac.th', label: 'เว็บโรงเรียน' }, { action: 'me' }, { action: 'code' }, { action: 'week' }, { action: 'holiday' }] };
+    const img = await richmenu.renderMenu(db, 'g1', '2026-11-23', design);
+    assert.ok(img.data.length <= 1024 * 1024, layout);
+    const def = richmenu.menuDefinition(db, 'g1', '2026-11-23', design);
+    assert.equal(def.size.height, richmenu.LAYOUTS[layout].h);
+    assert.equal(def.areas.length, richmenu.LAYOUTS[layout].slots + 1);
+    for (const a of def.areas) {
+      assert.ok(a.bounds.x >= 0 && a.bounds.y >= 0 && a.bounds.x + a.bounds.width <= 2500 && a.bounds.y + a.bounds.height <= def.size.height, `${layout} area`);
+      assert.ok(a.action.label.length <= 20);
+    }
+    assert.deepEqual(def.areas[2].action, { type: 'uri', label: 'เว็บโรงเรียน', uri: 'https://school.ac.th' });
+  }
+});
+
+test('เมนูค่าเริ่มต้น: ปุ่ม "ห้องของฉัน" กลายเป็น "รหัสสมาชิก"', () => {
+  const db = mkDb();
+  const svg = richmenu.buildSvg(db, null, '2026-11-17');
+  assert.match(svg, /รหัสสมาชิก/);
+  assert.match(svg, /แตะเพื่อดูรหัสสมาชิก/);
+  assert.match(richmenu.buildSvg(db, 'g1', '2026-11-17'), /ห้องของฉัน/);
+});
+
+test('สีที่ตั้งเอง และรูปพื้นหลังขนาดใหญ่ถูกบีบเป็น JPEG ไม่เกิน 1MB', async () => {
+  const db = mkDb();
+  const w = 1600, h = 900, px = Buffer.alloc(w * h * 4);
+  for (let i = 0; i < px.length; i += 4) { px[i] = Math.random() * 255; px[i + 1] = Math.random() * 255; px[i + 2] = Math.random() * 255; px[i + 3] = 255; }
+  fs.writeFileSync(path.join(store.FONT_DIR, 'img-noise.jpg'), jpeg.encode({ data: px, width: w, height: h }, 95).data);
+  const design = { colorMode: 'custom', colors: { header: '#0f766e', headerText: '#ffffff', accent: '#0f766e', page: '#ecfeff', button: '#ffffff', buttonText: '#134e4a', subText: '#5f7d7a' }, bgFile: 'img-noise.jpg', bgOverlay: 0.1 };
+  const svg = richmenu.buildSvg(db, 'g1', '2026-11-17', design);
+  assert.match(svg, /fill="#0f766e"/);
+  assert.match(svg, /data:image\/jpeg;base64/);
+  const img = await richmenu.renderMenu(db, 'g1', '2026-11-17', design);
+  assert.equal(img.contentType, 'image/jpeg');
+  assert.ok(img.data.length <= 1024 * 1024);
+});
+
+test('ฟอนต์ที่อัปโหลดเป็น woff2 ใช้กับริชเมนูไม่ได้ → ใช้ Prompt พร้อมคำเตือน', async () => {
+  const db = mkDb();
+  db.fonts.push({ id: 'f1', family: 'MyFont', file: 'x.woff2' });
+  const img = await richmenu.renderMenu(db, 'g1', '2026-11-17', { font: { source: 'custom', customFontId: 'f1' } });
+  assert.match(img.warning, /\.ttf/);
+  assert.ok(img.data.length > 1000);
+});

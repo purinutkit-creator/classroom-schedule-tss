@@ -104,7 +104,7 @@ test('ริชเมนู: สร้างครบทุกห้อง ผ�
   const made = [], linked = [], removed = [];
   let def = null, n = 0;
   t.mock.method(line.richMenu, 'create', async (s, menu) => { made.push(menu); return { richMenuId: `rm${++n}` }; });
-  t.mock.method(line.richMenu, 'upload', async (s, id, png) => { assert.ok(png.length > 1000 && png.length < 1024 * 1024); });
+  t.mock.method(line.richMenu, 'upload', async (s, id, png, type) => { assert.ok(png.length > 1000 && png.length <= 1024 * 1024); assert.match(type, /^image\/(png|jpeg)$/); });
   t.mock.method(line.richMenu, 'setDefault', async (s, id) => { def = id; });
   t.mock.method(line.richMenu, 'bulkLink', async (s, id, users) => { linked.push([id, users]); });
   t.mock.method(line.richMenu, 'remove', async (s, id) => { removed.push(id); });
@@ -163,7 +163,7 @@ test('ตอบคำสั่ง LINE ตามชั้นเรียนข�
   assert.match(JSON.stringify(holidays), /วันลอยกระทง/);
 
   const unassigned = reply(db, 'ตารางวันนี้', { id: 'U' + 'e'.repeat(32), type: 'user' });
-  assert.match(JSON.stringify(unassigned), /ยังไม่ได้ผูกกับชั้นเรียน/);
+  assert.match(JSON.stringify(unassigned), /ยังไม่ได้เข้าชั้นเรียน/);
   assert.match(JSON.stringify(reply(db, 'ห้องของฉัน', r41)), /ม\.4\/1/);
   assert.equal(reply(db, 'สวัสดี', r41), null);
 });
