@@ -497,13 +497,24 @@ function preview(db, groupId, key, design, opts) {
 const MAX_MENUS = 950;
 function personalTargets(db, design = normalizeDesign(db.settings.richMenu?.design)) {
   if (design.memberCode === 'off') return { users: [], skipped: 0 };
-  const active = db.recipients.filter((r) => r.type === 'user' && r.enabled !== false && !r.left && /^\d{6}$/.test(r.code || ''));
+  const active = db.recipients.filter((r) => r.type === 'user' && !r.left && /^\d{6}$/.test(r.code || ''));
   let list = design.memberCode === 'unassigned' ? active.filter((r) => !r.groupId) : active;
   list = [...list].sort((a, b) => (a.groupId ? 1 : 0) - (b.groupId ? 1 : 0)); // ยังไม่เข้าห้องก่อน
   const room = Math.max(0, MAX_MENUS - db.groups.length - 1);
   return { users: list.slice(0, room), skipped: Math.max(0, list.length - room) };
 }
 const wantsPersonal = (db, r, design) => personalTargets(db, design).users.some((x) => x.id === r.id);
+
+/** ผู้ใช้คนนี้ควรมีเมนูส่วนตัวของวันนี้ แต่ยังไม่มี (เช่น เพิ่งถูกบันทึก หรือสร้างไม่สำเร็จ) */
+const personalTried = new Map(); // กันสร้างซ้ำถี่เกินไป: userId -> เวลา
+function needsPersonal(db, r) {
+  const rm = db.settings.richMenu;
+  if (!rm?.enabled || !rm.builtFor || r.type !== 'user' || rm.personal?.[r.id]) return false;
+  if (Date.now() - (personalTried.get(r.id) || 0) < 10 * 60 * 1000) return false;
+  if (!wantsPersonal(db, r)) return false;
+  personalTried.set(r.id, Date.now());
+  return true;
+}
 
 /** สร้าง/อัปเดตเมนูส่วนตัวของผู้ใช้คนเดียว แล้วผูกให้ทันที (ใช้ตอนเพิ่มเพื่อนหรือย้ายห้อง) */
 async function buildPersonal(db, r, key = todayKeyOf(db)) {
@@ -547,7 +558,7 @@ async function rebuild(db) {
     const personalIds = new Set(personalUsers.map((r) => r.id));
     let linked = 0;
     for (const g of db.groups) {
-      const users = db.recipients.filter((r) => r.type === 'user' && r.groupId === g.id && r.enabled !== false && !r.left && !personalIds.has(r.id)).map((r) => r.id);
+      const users = db.recipients.filter((r) => r.type === 'user' && r.groupId === g.id && !r.left && !personalIds.has(r.id)).map((r) => r.id);
       if (users.length) { await line.richMenu.bulkLink(settings, created[g.id], users); linked += users.length; }
     }
     // เมนูส่วนตัวที่มีรหัสสมาชิก (สร้างหลังเมนูห้อง ถ้าสร้างไม่สำเร็จผู้ใช้ยังใช้เมนูห้องได้)
@@ -619,5 +630,5 @@ async function removeAll(db) {
 module.exports = {
   W, ACTIONS, LAYOUTS, DEFAULT_DESIGN, normalizeDesign, geometry,
   buildSvg, render, renderMenu, preview, menuDefinition, menuInfo, rebuild, linkRecipient, removeAll, todayKeyOf, textWidth,
-  ensureGoogleFont, forgetImage, buildPersonal, personalTargets, MAX_MENUS,
+  ensureGoogleFont, forgetImage, buildPersonal, personalTargets, needsPersonal, MAX_MENUS,
 };

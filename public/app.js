@@ -668,6 +668,11 @@
     await api(`/api/recipients/${encodeURIComponent(b.dataset.rcpDel)}`, { method: 'DELETE' });
     refresh();
   });
+  $('#sync-followers').onclick = () => busy($('#sync-followers'), async () => {
+    const r = await api('/api/line/sync-followers', { method: 'POST' });
+    toast(`เพื่อนใน LINE ${r.friends} คน · เพิ่มเข้าระบบใหม่ ${r.added} คน${S.settings.richMenu?.enabled ? ' · ระบบจะสร้างเมนูที่มีรหัสให้' : ''}`, 'ok');
+    await refresh();
+  });
   $('#add-recipient').onclick = async () => {
     const id = prompt('ใส่ LINE User ID / Group ID (ขึ้นต้นด้วย U หรือ C)');
     if (!id) return;
@@ -1191,10 +1196,15 @@
     $('#rm-group').innerHTML = `<option value="">เมนูค่าเริ่มต้น (ยังไม่ระบุห้อง)</option>` + S.groups.map((g) => `<option value="${g.id}">${esc(g.name)}</option>`).join('');
     $('#rm-group').value = [...$('#rm-group').options].some((o) => o.value === keep) ? keep : (ttGroup || '');
     if (!$('#rm-date').value) $('#rm-date').value = S.todayKey;
+    const users = S.recipients.filter((r) => r.type === 'user' && !r.left).length;
+    const zeroHint = rm.enabled && rm.builtAt && (S.settings.richMenu.design?.memberCode || 'all') !== 'off' && !rm.personalCount
+      ? `<br>ℹ️ <b>ยังไม่มีเมนูส่วนตัว (รหัสสมาชิก)</b> เพราะ${users ? 'บัญชีในระบบยังไม่เข้าเงื่อนไข' : 'ยังไม่มีบัญชี LINE ในระบบ'} — ระบบจะรู้จักบัญชีเมื่อนักเรียนเพิ่มเพื่อน พิมพ์ข้อความ หรือกดเมนูใน OA (เช่น กด “รหัสสมาชิก”) แล้วจะสร้างเมนูที่มีรหัสให้ทันที หรือกด “ดึงรายชื่อเพื่อนจาก LINE” ที่หน้า LINE OA`
+      : '';
     $('#rm-status').innerHTML = !rm.enabled ? '<span class="muted">เปิดใช้งานเพื่อให้ระบบสร้างริชเมนูอัตโนมัติทุกวัน</span>'
       : rm.lastError ? `⚠️ <b>สร้างไม่สำเร็จ:</b> ${esc(rm.lastError)} <span class="muted">(ระบบจะลองใหม่อัตโนมัติ)</span>`
       : rm.builtAt ? `✅ อัปเดตล่าสุด ${new Date(rm.builtAt).toLocaleString('th-TH', { timeZone: S.settings.timezone, dateStyle: 'medium', timeStyle: 'short' })} · เมนูห้อง ${Object.keys(rm.menus || {}).length} ชุด · เมนูส่วนตัว (มีรหัส) ${rm.personalCount || 0} คน${rm.personalSkipped ? ` · เกินเพดาน ${rm.personalSkipped} คน` : ''}${rm.personalFailed ? ` · ⚠️ สร้างไม่สำเร็จ ${rm.personalFailed} คน` : ''}`
       : 'กำลังรอสร้างเมนูแรก…';
+    if (zeroHint) $('#rm-status').innerHTML += zeroHint;
   }
   let rmUrl = null, rmSeq = 0;
   async function loadRichMenuPreview() {

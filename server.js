@@ -49,10 +49,14 @@ async function handleEvent(ev) {
     return;
   }
 
-  if (id && db.settings.line.autoAddFollowers && ['follow', 'join', 'message', 'memberJoined'].includes(ev.type)) {
+  // ทุกบัญชีที่เพิ่มเพื่อน/ทักมา/กดเมนู ถูกบันทึกไว้เพื่อให้มีรหัสสมาชิก
+  // (ถ้าปิด "เพิ่มผู้รับอัตโนมัติ" จะบันทึกไว้แต่ยังไม่ส่งแจ้งเตือนจนกว่าแอดมินจะเปิด)
+  let created = false;
+  if (id && ['follow', 'join', 'message', 'postback', 'memberJoined'].includes(ev.type)) {
     let r = db.recipients.find((x) => x.id === id);
     if (!r) {
-      r = { id, type, name: '', enabled: true, code: members.genCode(db), addedAt: new Date().toISOString() };
+      created = true;
+      r = { id, type, name: '', enabled: !!db.settings.line.autoAddFollowers, code: members.genCode(db), addedAt: new Date().toISOString() };
       db.recipients.push(r);
       try {
         r.name = type === 'user' ? (await line.profile(db.settings, id)).displayName
@@ -61,6 +65,10 @@ async function handleEvent(ev) {
       store.save();
     } else if (r.left) { r.left = false; r.enabled = true; store.save(); }
     if (r && !r.code) { r.code = members.genCode(db); store.save(); }
+    // สร้างริชเมนูส่วนตัว (มีรหัสสมาชิก) ให้ผู้ใช้ที่ยังไม่มี
+    if (r.type === 'user' && (created || richmenu.needsPersonal(db, r))) {
+      richmenu.linkRecipient(db, r).catch((e) => console.error('[richmenu] personal:', e.message));
+    }
   }
 
   if (!ev.replyToken) return;
@@ -68,8 +76,6 @@ async function handleEvent(ev) {
     const me = db.recipients.find((x) => x.id === id);
     const msgs = [{ type: 'text', text: `สวัสดีครับ 👋 ระบบ${db.settings.appName}จะแจ้งเตือนก่อนเริ่มคาบเรียนให้อัตโนมัติ\n\nกดเมนูด้านล่าง หรือพิมพ์ "ตารางวันนี้" "ตารางพรุ่งนี้" "คาบถัดไป" "วันหยุด" "รหัส" ได้เลย` }];
     if (me?.code) msgs.push(line.memberCardMessage(me, db.groups.find((g) => g.id === me.groupId), db));
-    // ผู้ใช้ใหม่: สร้างริชเมนูส่วนตัวที่มีรหัสสมาชิกให้ทันที
-    if (me && me.type === 'user') richmenu.linkRecipient(db, me).catch((e) => console.error('[richmenu] personal:', e.message));
     return line.reply(db.settings, ev.replyToken, msgs);
   }
   if (ev.type === 'message' && ev.message?.type === 'text' && db.settings.line.replyKeywords) {
@@ -554,6 +560,30 @@ app.put('/api/recipients/:id', (req, res) => {
   }
   store.save(); res.json(r);
 });
+// ดึงรายชื่อเพื่อนทั้งหมดจาก LINE (ใช้ได้กับบัญชี OA ที่ Verified/Premium)
+app.post('/api/line/sync-followers', async (req, res) => {
+  const db = store.db;
+  try {
+    const ids = await line.followerIds(db.settings);
+    let added = 0;
+    for (const uid of ids) {
+      if (db.recipients.some((r) => r.id === uid)) continue;
+      const r = { id: uid, type: 'user', name: 'ผู้ใช้ LINE', enabled: !!db.settings.line.autoAddFollowers, code: members.genCode(db), addedAt: new Date().toISOString() };
+      if (added < 300) { try { r.name = (await line.profile(db.settings, uid)).displayName || r.name; } catch { /* ignore */ } }
+      db.recipients.push(r);
+      added++;
+    }
+    markDirty();
+    store.save();
+    res.json({ ok: true, friends: ids.length, added });
+  } catch (e) {
+    const restricted = /403|not available|verified|premium/i.test(e.message);
+    res.status(400).json({ error: restricted
+      ? 'LINE อนุญาตให้ดึงรายชื่อเพื่อนได้เฉพาะบัญชี OA ที่เป็น Verified หรือ Premium — ให้นักเรียนพิมพ์ “รหัส” หรือกดเมนูในแชท OA แทน ระบบจะบันทึกบัญชีและสร้างเมนูที่มีรหัสให้ทันที'
+      : e.message });
+  }
+});
+
 // เพิ่มบัญชี LINE เข้าชั้นเรียนด้วยรหัสสมาชิก 6 หลัก
 app.post('/api/members/assign', (req, res) => {
   const db = store.db;

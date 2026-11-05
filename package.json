@@ -1,6 +1,6 @@
 {
   "name": "classroom-schedule-tss",
-  "version": "3.2.0",
+  "version": "3.2.1",
   "description": "ระบบตารางสอน + แจ้งเตือนผ่าน LINE OA (Flex Message) พร้อมนำทางไปห้องเรียน",
   "main": "server.js",
   "private": true,

@@ -176,3 +176,37 @@ test('รหัสสมาชิกแสดงบนแถบด้านบ�
   assert.match(svg, /รหัส 482913/, 'ปุ่มรหัสสมาชิกแสดงรหัสด้วย');
   assert.doesNotMatch(richmenu.buildSvg(db, null, "2026-11-17"), />482913</);
 });
+
+test('ผู้ใช้ที่ทักมา (ไม่เคยถูกบันทึก) ได้รหัส + เมนูส่วนตัวทันที แม้ปิดเพิ่มผู้รับอัตโนมัติ', async (t) => {
+  await store.init();
+  const app = require('../server');
+  const crypto = require('crypto');
+  const db = store.db;
+  db.settings.line.channelSecret = 'sec';
+  db.settings.line.channelAccessToken = 'tok';
+  db.settings.line.autoAddFollowers = false;
+  db.settings.richMenu = { ...db.settings.richMenu, enabled: true, builtFor: richmenu.todayKeyOf(db), menus: {}, personal: {}, design: { memberCode: 'all' } };
+  const replies = [], linked = [];
+  t.mock.method(line, 'reply', async (s, tok, msgs) => { replies.push(msgs); });
+  t.mock.method(line, 'profile', async () => ({ displayName: 'นักเรียนใหม่' }));
+  t.mock.method(line.richMenu, 'create', async () => ({ richMenuId: 'rmP' }));
+  t.mock.method(line.richMenu, 'upload', async () => {});
+  t.mock.method(line.richMenu, 'linkUser', async (s, uid, id) => { linked.push([uid, id]); });
+  t.mock.method(line.richMenu, 'remove', async () => {});
+  const uid = 'U' + 'f'.repeat(32);
+  const body = JSON.stringify({ events: [{ type: 'message', replyToken: 'r1', source: { type: 'user', userId: uid }, message: { type: 'text', text: 'รหัส' } }] });
+  const sig = crypto.createHmac('sha256', 'sec').update(body).digest('base64');
+  const server = app.listen(0);
+  try {
+    const res = await fetch(`http://127.0.0.1:${server.address().port}/webhook/line`, { method: 'POST', headers: { 'x-line-signature': sig, 'content-type': 'application/json' }, body });
+    assert.equal(res.status, 200);
+    for (let i = 0; i < 50 && !linked.length; i++) await new Promise((r) => setTimeout(r, 20));
+  } finally { server.close(); }
+  const r = db.recipients.find((x) => x.id === uid);
+  assert.ok(r, 'บันทึกบัญชีแล้ว');
+  assert.match(r.code, /^\d{6}$/);
+  assert.equal(r.enabled, false, 'ปิดเพิ่มผู้รับอัตโนมัติ: ยังไม่ส่งแจ้งเตือน');
+  assert.deepEqual(linked, [[uid, 'rmP']], 'ผูกเมนูส่วนตัวแล้ว');
+  assert.equal(db.settings.richMenu.personal[uid], 'rmP');
+  assert.match(JSON.stringify(replies[0]), new RegExp(r.code), 'ตอบบัตรรหัสสมาชิก');
+});

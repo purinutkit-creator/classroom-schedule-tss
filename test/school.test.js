@@ -113,7 +113,8 @@ test('ริชเมนู: สร้างครบทุกห้อง ผ�
   const r = await richmenu.rebuild(db);
   assert.equal(r.menus, 3);
   assert.equal(def, 'rm1');
-  assert.deepEqual(linked, [['rm2', ['U' + 'a'.repeat(32)]], ['rm3', ['U' + 'b'.repeat(32)]]]);
+  // เมนูไม่ขึ้นกับการเปิด/ปิดแจ้งเตือน: ผู้ใช้ที่ปิดแจ้งเตือน (d) ก็ได้เมนูของห้อง
+  assert.deepEqual(linked, [['rm2', ['U' + 'a'.repeat(32), 'U' + 'd'.repeat(32)]], ['rm3', ['U' + 'b'.repeat(32)]]]);
   assert.deepEqual(removed.sort(), ['old1', 'old2']);
   assert.deepEqual(db.settings.richMenu.menus, { _default: 'rm1', g41: 'rm2', g42: 'rm3' });
   const m = made[1];

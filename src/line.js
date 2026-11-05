@@ -76,6 +76,19 @@ async function multicast(settings, userIds, messages) {
     await call(token, '/message/multicast', { to: userIds.slice(i, i + 500), messages });
   }
 }
+/** รายชื่อ userId ของเพื่อนทั้งหมด (LINE ให้ใช้เฉพาะบัญชี Verified/Premium) */
+async function followerIds(settings) {
+  const token = creds(settings).token;
+  const ids = [];
+  let start = '';
+  for (let i = 0; i < 200; i++) {
+    const r = await call(token, `/followers/ids?limit=1000${start ? `&start=${encodeURIComponent(start)}` : ''}`, null, 'GET');
+    ids.push(...(r.userIds || []));
+    if (!r.next) break;
+    start = r.next;
+  }
+  return ids;
+}
 const push = (settings, to, messages) => call(creds(settings).token, '/message/push', { to, messages });
 const broadcast = (settings, messages) => call(creds(settings).token, '/message/broadcast', { messages });
 
@@ -427,7 +440,7 @@ function memberCardMessage(r, group, db) {
 
 module.exports = {
   memberCardMessage,
-  creds, call, verifySignature, send, reply, botInfo, profile, groupSummary, multicast, push, broadcast, richMenu,
+  creds, call, verifySignature, send, reply, botInfo, profile, groupSummary, multicast, followerIds, push, broadcast, richMenu,
   navUrl, classBubble, reminderMessage, dayScheduleMessage, dayScheduleBubble, weekScheduleMessage,
   specialDayMessage, upcomingSpecialMessage, minutesLabel,
 };
