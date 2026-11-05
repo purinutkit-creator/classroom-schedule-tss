@@ -643,7 +643,24 @@
   });
   $('#line-verify').onclick = () => busy($('#line-verify'), async () => {
     const info = await api('/api/line/verify', { method: 'POST' });
-    $('#bot-info').innerHTML = `<div class="bot">${info.pictureUrl ? `<img src="${esc(info.pictureUrl)}" alt="">` : '<div class="rcp-av">💬</div>'}<div><b>${esc(info.displayName)}</b><div class="muted small">${esc(info.basicId || '')} · เชื่อมต่อสำเร็จ ✅</div></div></div>`;
+    const w = info.webhook || {};
+    const ok = w.active && w.matches;
+    const whHtml = w.error ? `<div class="wh bad">⚠️ ตรวจ Webhook ไม่ได้: ${esc(w.error)}</div>`
+      : ok ? '<div class="wh good">✅ Webhook เปิดอยู่และ URL ถูกต้อง — ระบบได้รับข้อความจาก LINE</div>'
+      : `<div class="wh bad"><b>⚠️ LINE ยังไม่ส่งข้อความมาที่ระบบ</b> ระบบจึงตอบกลับ สร้างรหัสสมาชิก และเมนูส่วนตัวไม่ได้<br>
+         ${!w.matches ? `• Webhook URL ตอนนี้: <code>${esc(w.endpoint || '(ว่าง)')}</code> ควรเป็น <code>${esc(w.expected)}</code><br>` : ''}
+         ${!w.active ? '• ยังไม่ได้เปิด <b>Use webhook</b><br>' : ''}
+         <b>วิธีแก้:</b> 1) กดปุ่มด้านล่างให้ระบบตั้ง URL ให้ 2) ไปที่ LINE Official Account Manager → ตั้งค่า → <b>การตั้งค่าการตอบกลับ</b> เปิด <b>Webhook</b> และปิด <b>ข้อความตอบกลับอัตโนมัติ</b> (และใน LINE Developers → Messaging API เปิด Use webhook)
+         <div class="row gap mt"><button type="button" class="btn sm primary" id="wh-fix">🔧 ตั้ง Webhook URL ให้อัตโนมัติ</button></div></div>`;
+    $('#bot-info').innerHTML = `<div class="bot">${info.pictureUrl ? `<img src="${esc(info.pictureUrl)}" alt="">` : '<div class="rcp-av">💬</div>'}<div><b>${esc(info.displayName)}</b><div class="muted small">${esc(info.basicId || '')} · Token ใช้งานได้ ✅</div></div></div>${whHtml}`;
+  });
+  $('#bot-info').addEventListener('click', (e) => {
+    if (!e.target.closest('#wh-fix')) return;
+    busy(e.target, async () => {
+      const r = await api('/api/line/webhook/fix', { method: 'POST' });
+      toast(r.test?.success ? `ตั้ง Webhook URL แล้ว และทดสอบสำเร็จ ✅${r.active ? '' : ' — อย่าลืมเปิด Use webhook'}` : `ตั้ง URL แล้ว แต่ทดสอบไม่ผ่าน: ${r.test?.reason || r.test?.detail || 'ไม่ทราบสาเหตุ'}`, r.test?.success ? 'ok' : 'err');
+      $('#line-verify').click();
+    });
   });
   $('#line-mode-form').addEventListener('change', async (e) => {
     const t = e.target;

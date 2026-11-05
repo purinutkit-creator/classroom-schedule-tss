@@ -32,7 +32,9 @@ app.post('/webhook/line', express.raw({ type: '*/*', limit: '1mb' }), async (req
   res.sendStatus(200); // ตอบ LINE ทันที แล้วค่อยประมวลผล
   let payload;
   try { payload = JSON.parse(raw.toString('utf8')); } catch { return; }
-  for (const ev of payload.events || []) {
+  const evs = payload.events || [];
+  if (evs.length) console.log(`[webhook] ได้รับ ${evs.map((e) => `${e.type}${e.message?.type === 'text' ? `:"${String(e.message.text).slice(0, 20)}"` : ''} จาก ${(e.source?.userId || e.source?.groupId || '?').slice(0, 8)}…`).join(', ')}`);
+  for (const ev of evs) {
     try { await handleEvent(ev); } catch (e) { console.error('[webhook]', e.message); }
   }
 });
@@ -291,8 +293,29 @@ app.put('/api/settings/ai', (req, res) => {
 });
 
 app.post('/api/line/verify', async (req, res) => {
-  try { res.json(await line.botInfo(store.db.settings)); }
-  catch (e) { res.status(400).json({ error: e.message }); }
+  const db = store.db;
+  try {
+    const info = await line.botInfo(db.settings);
+    const expected = publicUrl(req) + '/webhook/line';
+    let webhook = null;
+    try {
+      const w = await line.webhookInfo(db.settings);
+      webhook = { endpoint: w.endpoint || '', active: !!w.active, expected, matches: (w.endpoint || '').replace(/\/$/, '') === expected };
+    } catch (e) { webhook = { error: e.message, expected }; }
+    res.json({ ...info, webhook });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+// ตั้ง Webhook URL ให้ถูกต้องและทดสอบให้อัตโนมัติ
+app.post('/api/line/webhook/fix', async (req, res) => {
+  const db = store.db;
+  const expected = publicUrl(req) + '/webhook/line';
+  try {
+    await line.setWebhook(db.settings, expected);
+    let test = null;
+    try { test = await line.testWebhook(db.settings, expected); } catch (e) { test = { success: false, reason: e.message }; }
+    const w = await line.webhookInfo(db.settings);
+    res.json({ endpoint: w.endpoint, active: !!w.active, test });
+  } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
 function buildMessage(db, body) {

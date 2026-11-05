@@ -89,6 +89,10 @@ async function followerIds(settings) {
   }
   return ids;
 }
+// สถานะ Webhook ของ channel (URL และเปิด Use webhook หรือไม่)
+const webhookInfo = (settings) => call(creds(settings).token, '/channel/webhook/endpoint', null, 'GET');
+const setWebhook = (settings, endpoint) => call(creds(settings).token, '/channel/webhook/endpoint', { endpoint }, 'PUT');
+const testWebhook = (settings, endpoint) => call(creds(settings).token, '/channel/webhook/test', endpoint ? { endpoint } : {});
 const push = (settings, to, messages) => call(creds(settings).token, '/message/push', { to, messages });
 const broadcast = (settings, messages) => call(creds(settings).token, '/message/broadcast', { messages });
 
@@ -440,7 +444,7 @@ function memberCardMessage(r, group, db) {
 
 module.exports = {
   memberCardMessage,
-  creds, call, verifySignature, send, reply, botInfo, profile, groupSummary, multicast, followerIds, push, broadcast, richMenu,
+  creds, call, verifySignature, send, reply, botInfo, profile, groupSummary, multicast, followerIds, webhookInfo, setWebhook, testWebhook, push, broadcast, richMenu,
   navUrl, classBubble, reminderMessage, dayScheduleMessage, dayScheduleBubble, weekScheduleMessage,
   specialDayMessage, upcomingSpecialMessage, minutesLabel,
 };

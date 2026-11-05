@@ -531,6 +531,7 @@ async function buildPersonal(db, r, key = todayKeyOf(db)) {
   }
   const old = rm.personal[r.id];
   rm.personal[r.id] = richMenuId;
+  console.log(`[richmenu] สร้างเมนูส่วนตัวให้ ${r.name || r.id.slice(0, 8)} (รหัส ${r.code})`);
   if (old && old !== richMenuId) { try { await line.richMenu.remove(db.settings, old); } catch { /* ลบไปแล้ว */ } }
   store.save();
   return richMenuId;
